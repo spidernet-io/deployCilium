@@ -1,10 +1,27 @@
 #!/bin/bash
 
 :<<EOF
-# ./setupClusterMesh.sh  Cluster1ApiServerIP[:Cluster1Name] Cluster2ApiServerIP[:Cluster2Name] ... "
+在运行机器上，有两种方式运行本脚本：
+
+方式一：通过 IP 地址方式
+    确保能够以 root 账户进行 ssh 免密登录几个互联集群的 master 节点，这些节点存在 /root/.kube/config
+    运行如下命令，它会 ssh 获得有集群上的 master 节点的 /root/.kube/config， 然后在本地生成一份聚合的 /root/.kube/config，对这些集群实现互联
+    其中， Cluster1ApiServerIP 是 集群1 的 master ip 地址 。 Cluster1Name 是自定义的一个集群唯一名字
+
+    ./setupClusterMesh.sh  Cluster1ApiServerIP[:Cluster1Name] Cluster2ApiServerIP[:Cluster2Name] [Cluster3ApiServerIP[:Cluster3Name]] ... "
+    # example: ./setupClusterMesh.sh  172.16.1.11:cluster1  172.16.2.22:cluster2  172.16.2.24:cluster3
+
+方式二：通过本地配置文件路径方式
+    如果已经在本地有各个集群的 kubeconfig 文件，可以直接指定这些文件的路径
+    运行如下命令，它会使用这些本地配置文件，然后在本地生成一份聚合的 /root/.kube/config，对这些集群实现互联
+    其中， Cluster1ConfigPath 是 集群1 的 kubeconfig 文件路径 。 Cluster1Name 是自定义的一个集群唯一名字
+
+    ./setupClusterMesh.sh  Cluster1ConfigPath[:Cluster1Name] Cluster2ConfigPath[:Cluster2Name] [Cluster3ConfigPath[:Cluster3Name]] ... "
+    # example: ./setupClusterMesh.sh  /path/to/cluster1/config:/cluster1  /path/to/cluster2/config:/cluster2
 
 
-实现：
+
+多集群功能：
     1 不同集群间的 pod ip 相互访问  Pod IP  （ ipv4 和 ipv6 ）
 
     2 不同集群间，可以访问 对方的 service cluster ip  ， 实现跨集群访问服务
@@ -59,6 +76,7 @@ mkdir -p ${CONFIG_DIR} || true
 if [ $# -eq 0 ]; then
     echo "Error: No cluster parameters provided"
     echo "Usage: $0 Cluster1ApiServerIP[:Cluster1Name] Cluster2ApiServerIP[:Cluster2Name] ..."
+    echo "   or: $0 Cluster1ConfigPath[:Cluster1Name] Cluster2ConfigPath[:Cluster2Name] ..."
     exit 1
 fi
 
@@ -73,11 +91,11 @@ for cluster_param in "$@"; do
     # Debug log
     # echo "DEBUG: Processing cluster parameter: $cluster_param"
     
-    # Parse IP:Port[:Name]
-    if [[ "$cluster_param" =~ ^([^:]+):([^:]+)(:(.+))?$ ]]; then
+    # Parse parameter: could be either IP[:Name] or ConfigPath[:Name]
+    if [[ "$cluster_param" =~ ^([^:]+)(:(.+))?$ ]]; then
         # Extract components
-        ip=${BASH_REMATCH[1]}
-        name=${BASH_REMATCH[4]}
+        param=${BASH_REMATCH[1]}
+        name=${BASH_REMATCH[3]}
         
         # If name is not provided, use a default name based on cluster number
         if [ -z "$name" ]; then
@@ -85,21 +103,32 @@ for cluster_param in "$@"; do
         fi
         
         # Store in arrays
-        cluster_ips[$cluster_count]=$ip
+        cluster_params[$cluster_count]=$param
         cluster_names[$cluster_count]=$name
         
         # Also create individual variables for each cluster
-        # Format: cluster1_ip, cluster1_port, cluster1_name, cluster2_ip, etc.
-        declare "cluster${cluster_count}_ip=$ip"
+        declare "cluster${cluster_count}_param=$param"
         declare "cluster${cluster_count}_name=$name"
+        
+        # Check if the parameter is a file path or an IP address
+        if [ -f "$param" ]; then
+            # It's a file path
+            cluster_types[$cluster_count]="file"
+            echo "INFO: Parameter '$param' detected as a config file path"
+        else
+            # It's an IP address
+            cluster_types[$cluster_count]="ip"
+            echo "INFO: Parameter '$param' detected as an IP address"
+        fi
         
         # Log the parsed information
         #echo "INFO: Cluster $cluster_count parsed:"
-        #echo "  - IP: $ip"
+        #echo "  - Param: $param"
+        #echo "  - Type: ${cluster_types[$cluster_count]}"
         #echo "  - Name: $name"
     else
         echo "ERROR: Invalid cluster parameter format: $cluster_param"
-        echo "Expected format: IP[:Name]"
+        echo "Expected format: IP[:Name] or ConfigPath[:Name]"
         exit 1
     fi
 done
@@ -110,14 +139,15 @@ echo "INFO: Total clusters parsed: $cluster_count"
 # Example of how to use the parsed variables
 for ((i=1; i<=cluster_count; i++)); do
     echo "Cluster $i:"
-    echo "  - IP: ${cluster_ips[$i]}"
+    echo "  - Parameter: ${cluster_params[$i]}"
+    echo "  - Type: ${cluster_types[$i]}"
     echo "  - Name: ${cluster_names[$i]}"
     
     # Alternative way to access using dynamic variable names
-    # ip_var="cluster${i}_ip"
+    # param_var="cluster${i}_param"
     # name_var="cluster${i}_name"
     # echo "  Using variable names:"
-    # echo "  - IP: ${!ip_var}"
+    # echo "  - Param: ${!param_var}"
     # echo "  - Name: ${!name_var}"
 done
 
@@ -134,7 +164,18 @@ echo "---------------------------- generate kubeconfig for all clusters --------
 PARAMETERS=""
 for ((i=1; i<=cluster_count; i++)); do
     echo "get kubecon of Cluster $i "
-    scp root@${cluster_ips[$i]}:/root/.kube/config ${CONFIG_DIR}/${cluster_names[$i]}
+    if [ "${cluster_types[$i]}" == "ip" ]; then
+        # If it's an IP address, use SSH to copy the kubeconfig
+        scp root@${cluster_params[$i]}:/root/.kube/config ${CONFIG_DIR}/${cluster_names[$i]}
+    else
+        # If it's a file path, copy the file directly
+        # Check if source and destination are the same file
+        if [ "$(realpath ${cluster_params[$i]})" != "$(realpath ${CONFIG_DIR}/${cluster_names[$i]})" ]; then
+            cp ${cluster_params[$i]} ${CONFIG_DIR}/${cluster_names[$i]}
+        else
+            echo "INFO: Source and destination are the same file for ${cluster_names[$i]}, skipping copy"
+        fi
+    fi
     PARAMETERS="${PARAMETERS} ${CONFIG_DIR}/${cluster_names[$i]}:${cluster_names[$i]}"
 done
 

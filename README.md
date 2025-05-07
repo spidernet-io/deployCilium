@@ -80,12 +80,12 @@ cilium/
 
 * 步骤6，可选，实现多集群互联
 
-    （1）创建 /root/clustermesh 目录，把本集群的 /root/.kube/config 拷贝到该目录下，命名为 /root/clustermesh/cluster1 ； 把本集群互联的目标集群的  /root/.kube/config 拷贝到该目录下，命名为 /root/clustermesh/cluster2
+    （1）创建 /root/clustermesh 目录，把所有希望互联的集群的/root/.kube/config 拷贝到该目录下，命名为 /root/clustermesh/cluster1、 /root/clustermesh/cluster2、/root/clustermesh/cluster3 ..... 
 
-    （2）进入本工程的 cilium 子目录，运行如下命令，它会自动寻 /root/clustermesh 中的两个集群的配置，完成多集群互联的配置
+    （2）进入本工程的 cilium 子目录，运行如下命令，完成多集群互联的配置
 
     ```bash
-    ./setupClusterMesh.sh
+    ./setupClusterMesh.sh  /root/clustermesh/cluster1  /root/clustermesh/cluster2 [/root/clustermesh/cluster3 ... ]
     ```
 
     （3）检查多集群互联状态
