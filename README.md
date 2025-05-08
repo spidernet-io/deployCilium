@@ -40,22 +40,30 @@ cilium/
 
     安装单栈集群
     ```bash
-    POD_v4CIDR="172.16.0.0/16" POD_v4Block="24" \
-    CLUSTER_NAME="cluster1" CLUSTER_ID="10" \
-    CLUSTERMESH_APISERVER_NODEPORT="31001" \
-    K8S_API_IP="10.0.1.11" K8S_API_PORT="6443" \
-    HUBBLE_WEBUI_NODEPORT_PORT="31000" \
+    export POD_v4CIDR="172.16.0.0/16"
+    export POD_v4Block="24"
+    export CLUSTER_NAME="cluster1"
+    export CLUSTER_ID="10"
+    export CLUSTERMESH_APISERVER_NODEPORT="31001"
+    export K8S_API_IP="10.0.1.11"
+    export K8S_API_PORT="6443"
+    export HUBBLE_WEBUI_NODEPORT_PORT="31000"
     ./setup.sh
     ```
 
     安装双栈集群
     ```bash
-    POD_v4CIDR="172.16.0.0/16" POD_v4Block="24" \
-    ENABLE_IPV6="true" POD_v6CIDR="fd00::/48" POD_v6Block="64" \
-    CLUSTER_NAME="cluster1" CLUSTER_ID="10" \
-    CLUSTERMESH_APISERVER_NODEPORT="31001" \
-    K8S_API_IP="10.0.1.11" K8S_API_PORT="6443" \
-    HUBBLE_WEBUI_NODEPORT_PORT="31000" \
+    export POD_v4CIDR="172.16.0.0/16"
+    export POD_v4Block="24"
+    export ENABLE_IPV6="true"
+    export POD_v6CIDR="fd00::/48"
+    export POD_v6Block="64"
+    export CLUSTER_NAME="cluster1"
+    export CLUSTER_ID="10"
+    export CLUSTERMESH_APISERVER_NODEPORT="31001"
+    export K8S_API_IP="10.0.1.11"
+    export K8S_API_PORT="6443"
+    export HUBBLE_WEBUI_NODEPORT_PORT="31000"
     ./setup.sh
     ```
 
