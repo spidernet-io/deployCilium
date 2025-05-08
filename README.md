@@ -26,21 +26,32 @@ cilium/
 
     （1）把整个工程拷贝到 master 节点上, 确保机器上有如下 CLI： helm、kubectl、jq
 
-    （2）确保已经安装了 K8S 集群（例如已经安装了 calico，或者没有安装任何网络插件）。安装的最佳时机， 可以是在集群完成了第一台 或者 三台 master 节点安装后，来运行该套脚本，它会自动卸载 calico，安装 cilium （ 完成cilium 安装后，可继续接入集群的 worker 节点 ）
+    （2）确保已经安装了 K8S 集群
 
 * 步骤2，安装 cilium
 
     进入工程的 cilium 子目录下，运行如下命令，它会完成 CLI 的安装，以及 chart 的安装，并且，该脚本执行过程中，也会尝试卸载 calico
 
+    安装单栈集群
     ```bash
     POD_v4CIDR="172.16.0.0/16" POD_v4Block="24" \
-    ENABLE_IPV6="false" POD_v6CIDR="fd00::/48" POD_v6Block="64" \
     CLUSTER_NAME="cluster1" CLUSTER_ID="10" \
     CLUSTERMESH_APISERVER_NODEPORT="31001" \
     K8S_API_IP="10.0.1.11" K8S_API_PORT="6443" \
     HUBBLE_WEBUI_NODEPORT_PORT="31000" \
     DISABLE_KUBE_PROXY="true" \
-    UNINSTALL_OLD_CILIUM_CRD="true" \
+    ./setup.sh
+    ```
+
+    安装双栈集群
+    ```bash
+    POD_v4CIDR="172.16.0.0/16" POD_v4Block="24" \
+    ENABLE_IPV6="true" POD_v6CIDR="fd00::/48" POD_v6Block="64" \
+    CLUSTER_NAME="cluster1" CLUSTER_ID="10" \
+    CLUSTERMESH_APISERVER_NODEPORT="31001" \
+    K8S_API_IP="10.0.1.11" K8S_API_PORT="6443" \
+    HUBBLE_WEBUI_NODEPORT_PORT="31000" \
+    DISABLE_KUBE_PROXY="true" \
     ./setup.sh
     ```
 
@@ -51,16 +62,19 @@ cilium/
 > * CLUSTERMESH_APISERVER_NODEPORT 是 cilium 的多集群互联的 nodePort 号，可手动指定一个在合法的 nodePort 范围内的地址（通常在 30000-32767 ）。注意，每一个集群设置的该参数必须是唯一的，否则多集群互联时会出问题。
 > * K8S_API_IP 和 K8S_API_PORT 表示本集群 Kubernetes API 服务器的地址，它用于在不需要 kube-proxy 时，cilium 也能访问 api server，为集群提供 service 能力。因此，这个地址不能是 clusterIP，而必须是单个主机的 Kubernetes API 服务器的物理地址，或者通过 keepalived 等工具实现的高可用地址。
 > * HUBBLE_WEBUI_NODEPORT_PORT 是 cilium 的可观测性 GUI 的 nodePort 号，可手动指定一个在合法的 nodePort 范围内的地址（通常在 30000-32767 ）
-> * DISABLE_KUBE_PROXY 指示了是否要禁用 kube-proxy
-> * UNINSTALL_OLD_CILIUM_CRD 指示了是否要卸载旧版本的 cilium CRD .  本脚本在运行时，会尝试 helm uninstall 集群中的存在的老 cilium 安装，因为 helm uninstall 不会卸载 CRD，因此，提供本变量来进行单独处理。老 CRD 的残留会出现的问题，例如，老的 POD cidr 会继续生效，不会遵循新安装中指定的 CIDR
 > * cilium 遵循 K8S 集群的 clusterIP CIDR 设置。并且，cilium 在实现多集群互联时，允许不同集群的 clusterIP CIDR 是重叠的
 
-* 步骤3，如果之前安装过 calico 等 CNI ，为了实现清除它们的 iptables 规则， 可以考虑把所有主机重启，确保 ciium 在一个干净的环境中工作 。
-    并且，重启主机可以让所有的 POD 重启，接入 cilium 的网络 。
+* 步骤3，（可选）如有必要，可以杀掉所有的 POD， 让它们快速接入 cilium 的网络
+
+    ```bash
+    chmod +x restartAllPods.sh
+    ./restartAllPods.sh
+    ```
 
 * 步骤4，完成 cilium 安装后，可运行如下命令，查看本集群 cilium 的状态
 
     ```bash
+    chmod +x ./showStatus.sh
     ./showStatus.sh
     ```
 
@@ -73,6 +87,7 @@ cilium/
     （2）进入工程的 cilium 子目录下，运行如下命令，它会完成指标的开启，以及观测面板的开启
 
     ```bash
+    chmod +x ./setupMetrics.sh
     ./setupMetrics.sh
     ```
 
@@ -85,6 +100,7 @@ cilium/
     （2）进入本工程的 cilium 子目录，运行如下命令，完成多集群互联的配置
 
     ```bash
+    chmod +x ./showClusterMesh.sh
     ./setupClusterMesh.sh  /root/clustermesh/cluster1  /root/clustermesh/cluster2 [/root/clustermesh/cluster3 ... ]
     ```
 
@@ -94,4 +110,11 @@ cilium/
 
     ```bash
     ./showClusterMesh.sh
+    ```
+
+## 卸载
+
+    ```bash
+    chmod +x ./uninstall.sh
+    ./uninstall.sh
     ```

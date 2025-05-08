@@ -3,42 +3,13 @@
 :<<EOF
 在运行机器上，有两种方式运行本脚本：
 
-方式一：通过 IP 地址方式
-    确保能够以 root 账户进行 ssh 免密登录几个互联集群的 master 节点，这些节点存在 /root/.kube/config
-    运行如下命令，它会 ssh 获得有集群上的 master 节点的 /root/.kube/config， 然后在本地生成一份聚合的 /root/.kube/config，对这些集群实现互联
-    其中， Cluster1ApiServerIP 是 集群1 的 master ip 地址 。 Cluster1Name 是自定义的一个集群唯一名字
-
-    ./setupClusterMesh.sh  Cluster1ApiServerIP[:Cluster1Name] Cluster2ApiServerIP[:Cluster2Name] [Cluster3ApiServerIP[:Cluster3Name]] ... "
-    # example: ./setupClusterMesh.sh  172.16.1.11:cluster1  172.16.2.22:cluster2  172.16.2.24:cluster3
-
-方式二：通过本地配置文件路径方式
+方式：通过本地配置文件路径方式
     如果已经在本地有各个集群的 kubeconfig 文件，可以直接指定这些文件的路径
     运行如下命令，它会使用这些本地配置文件，然后在本地生成一份聚合的 /root/.kube/config，对这些集群实现互联
     其中， Cluster1ConfigPath 是 集群1 的 kubeconfig 文件路径 。 Cluster1Name 是自定义的一个集群唯一名字
 
     ./setupClusterMesh.sh  Cluster1ConfigPath[:Cluster1Name] Cluster2ConfigPath[:Cluster2Name] [Cluster3ConfigPath[:Cluster3Name]] ... "
     # example: ./setupClusterMesh.sh  /path/to/cluster1/config:/cluster1  /path/to/cluster2/config:/cluster2
-
-
-
-多集群功能：
-    1 不同集群间的 pod ip 相互访问  Pod IP  （ ipv4 和 ipv6 ）
-
-    2 不同集群间，可以访问 对方的 service cluster ip  ， 实现跨集群访问服务
-       不同集群的 pod 也可以 共享一个 service， 实现服务的跨集群 高可用
-    甚至，包括 场景 split a service’s pods into e.g. two groups, with the first half scheduled to cluster1, and the second half to cluster2，If you have scattered your pods of a same service into different clusters , and you would like service discovery/load-balancing or enforce network policies on these services, you may need clustermesh.
-
-    3 跨集群间的 服务发现 Transparent service discovery with standard Kubernetes services and coredns/kube-dns.
-
-    4 不同集群间的网络policy（只支持部分类型的policy）
-
-    5 跨集群间的流量加密Transparent encryption for all communication between nodes in the local cluster as well as across cluster boundaries.
-
-    6 hubble 可观性 能跨集群 查看 （暂时没测试出来）
-
-     7 它支持 enableEndpointSliceSynchronization ， 因此， ingress 应该可以实现 跨集群 转发 
-
-     8 集群之间是 点对点 peer 的， 因此， 如果大于 3 个集群的情况下， 两两 集群之间 都要相互 peer 
 
 
 https://docs.cilium.io/en/latest/network/clustermesh/clustermesh/
@@ -70,7 +41,7 @@ CONFIG_PATH=${CONFIG_PATH:-"${CONFIG_DIR}/config"}
 
 mkdir -p ${CONFIG_DIR} || true
 
-#===================================  get input clusters ==========================
+#===================================  分析命令行参数 ==========================
 
 # Check if there are any arguments
 if [ $# -eq 0 ]; then
@@ -121,11 +92,6 @@ for cluster_param in "$@"; do
             echo "INFO: Parameter '$param' detected as an IP address"
         fi
         
-        # Log the parsed information
-        #echo "INFO: Cluster $cluster_count parsed:"
-        #echo "  - Param: $param"
-        #echo "  - Type: ${cluster_types[$cluster_count]}"
-        #echo "  - Name: $name"
     else
         echo "ERROR: Invalid cluster parameter format: $cluster_param"
         echo "Expected format: IP[:Name] or ConfigPath[:Name]"
@@ -143,12 +109,6 @@ for ((i=1; i<=cluster_count; i++)); do
     echo "  - Type: ${cluster_types[$i]}"
     echo "  - Name: ${cluster_names[$i]}"
     
-    # Alternative way to access using dynamic variable names
-    # param_var="cluster${i}_param"
-    # name_var="cluster${i}_name"
-    # echo "  Using variable names:"
-    # echo "  - Param: ${!param_var}"
-    # echo "  - Name: ${!name_var}"
 done
 
 # Now you can use these variables in your script
@@ -159,7 +119,8 @@ if (( cluster_count < 2 )); then
     exit 1
 fi
 
-echo "---------------------------- generate kubeconfig for all clusters -------------------------------------"
+
+echo "---------------------------- 生成一个聚合的 kubeconfig 文件 -------------------------------------"
 
 PARAMETERS=""
 for ((i=1; i<=cluster_count; i++)); do
@@ -194,7 +155,7 @@ done
 
 
 
-echo "---------------------------- connect cilium in all clusters-------------------------------------"
+echo "---------------------------- 把所有集群的 cilium 互联一起 -------------------------------------"
 
 echo "--------------- enable clustermesh in all clusters "
 for ((i=1; i<=cluster_count; i++)); do
@@ -210,7 +171,6 @@ for ((i=2; i<=cluster_count; i++)); do
         kubectl --context=${cluster_names[1]} get secret -n kube-system cilium-ca -o yaml | kubectl --context=${cluster_names[$i]} apply -f -
 done
 
-# full mesh 拓扑
 echo "--------------- connect all clusters with full mesh topology "
 for ((i=1; i<=cluster_count; i++)); do
     for ((j=i+1; j<=cluster_count; j++)); do
@@ -219,15 +179,5 @@ for ((i=1; i<=cluster_count; i++)); do
     done
 done
 
-# 星状拓扑
-# for ((i=2; i<=cluster_count; i++)); do
-#     echo "--------------- connect cilium in ${cluster_names[1]} and ${cluster_names[$i]}"
-#     cilium clustermesh connect --context ${cluster_names[$i]} --destination-context ${cluster_names[1]}
-# done
 
-sleep 30
-echo "============== finished ==================="
-
-#chmod +x ${CURRENT_DIR_PATH}/showClusterMesh.sh
-#${CURRENT_DIR_PATH}/showClusterMesh.sh
 

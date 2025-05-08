@@ -1,0 +1,251 @@
+cni:
+  # 如果开启， cilium 会把 /etc/cni/net.d 目录下的 其它 conflist 配置文件 改名为 *.cilium_bak ，确保自己能够被 K8S 调用
+  exclusive: false
+
+# service mesh, for ingress
+# cilium 需要 L4 Loadbalancer 来分 南北向的 4层入口，cilium 自动为每一个 ingress 对象 维护一个 Loadbalancer 的 service
+# 如下 loadbalancerMode= shared | dedicated ， 设置 缺省的 ingress 创建 service 的行为，是共享一个，还是分别有独立的 。 应用可通过 annotaiton 额外指定 模式
+ingressController:
+  enabled: true
+  default: true
+  loadbalancerMode: shared
+  service:
+    type: NodePort
+  enforceHttps: false
+
+bpf:
+  # 允许集群外部 访问 cluster ip
+  lbExternalClusterIP: false
+  # preallocateMaps: memory usage but can reduce latency
+  preallocateMaps: true
+  tproxy: true
+  lbBypassFIBLookup: true
+
+  # hostLegacyRouting: 要求kernel>=5.10. Configure whether direct routing mode should route traffic via host stack (true) or bypass netfilter in the host namespace 
+  hostLegacyRouting: true
+
+  masquerade: true
+
+egressGateway:
+  # -- Enables egress gateway to redirect and SNAT the traffic that leaves the cluster.
+  enabled: true
+ciliumEndpointSlice:
+  # Egress gateway is not compatible with the CiliumEndpointSlice feature
+  enabled: false
+
+authentication:
+  # mesh-auth-enabled
+  enabled: false
+
+# List of devices used to attach bpf_host.o (implements BPF NodePort,host-firewall and BPF masquerading)
+# by default , chose the interface that Kubernetes InternalIP or then ExternalIP assigned
+#  supports '+' as wildcard in device name, e.g. 'eth+'
+#HELM_OPTIONS+=" --set devices='ens192' "
+#HELM_OPTIONS+=" --set devices='{ens192,ens224}' "
+#HELM_OPTIONS+=" --set devices='{eno+,ens+}' "
+# devices: "${HOST_DEVICE_FOR_EBPF}"
+
+ipv4:
+  enabled: true
+#ipv6:
+#  enabled: ${ENABLE_IPV6}
+
+# masqurade
+# bpf.masquerade: Masquerade packets from endpoints leaving the host with BPF instead of iptables
+# ipv4NativeRoutingCIDR , 配置哪些 CIDR 不需要做 SNAT Specify the CIDR for native routing (ie to avoid IP masquerade for) , This value corresponds to the configured cluster-cidr
+# "BPF masquerade is not supported for IPv6."
+# ipMasqAgent.enabled 如果开启了 ipMasqAgent， 默认的 nonMasqueradeCIDRs 扩大了 . 一般情况下，基本的 masquerade 够用,不需要 ipMasqAgent 模式
+enableIPv4Masquerade: true
+#enableIPv6Masquerade: ${ENABLE_IPV6}
+
+bandwidthManager:
+  enabled: true
+
+hostFirewall:
+  enabled: true
+
+localRedirectPolicy: true
+
+wellKnownIdentities:
+  enabled: true
+
+# required
+securityContext:
+  privileged: true
+
+#debug:
+#  enabled: ${ENABLE_DEBUG}
+
+# mounting the eBPF filesystem and updating the existing Azure CNI plugin to run in ‘transparent’ mode.
+nodeinit:
+  enabled: true
+  securityContext:
+    privileged: true
+
+# deploy envoy as standalone daemonset, but does not run inside cilium agent pod
+# This means both the Cilium agent and the Envoy proxy not only share the same lifecycle but also the same blast radius in the event of a compromise
+envoy:
+  enabled: true
+
+bgpControlPlane:
+  enabled: true
+
+
+routingMode: "tunnel"
+tunnelProtocol: "vxlan"
+autoDirectNodeRoutes: "false"
+
+loadBalancer:
+  mode: "snat"
+
+  # DSR currently requires Cilium to be deployed in Native-Routing(no tunnel), i.e. it will not work in either tunneling mode
+  # loadBalancer.dsrDispatch: =opt  for ip , =ipip for ipip
+  # loadBalancer.dsrDispatch=ipip 要求 支持部署 基于 xdp 的  独立的 L4 LoadBalancer : --set loadBalancer.standalone=true
+  dsrDispatch: "opt"
+
+  # loadBalancer.acceleration = native , for xdp nodeport
+  # Cannot use NodePort acceleration with tunneling
+  acceleration: "disabled"
+
+externalIPs:
+  enabled: true
+
+nodePort:
+  enabled: true
+
+# Cilium’s eBPF kube-proxy replacement currently cannot be used with Transparent Encryption
+encryption:
+  enabled: false
+
+
+sessionAffinity: true
+
+# node 为 本地 pod 在pod 启动时发送 免费ARP， 但 pod 运行时，不会响应平时 arp请求
+l2podAnnouncements:
+  enabled: false
+
+# ARP for service loadbalancerIP / externalIPs
+# issue: https://docs.cilium.io/en/stable/network/l2-announcements/#sizing-client-rate-limit
+# Kube Proxy replacement mode must be enabled and set to strict mode for l2announcements
+l2announcements:
+  enabled: true
+k8sClientRateLimit:
+  qps: 50
+  burst: 60
+
+hostPort:
+  enabled: true
+
+kubeProxyReplacement: true
+
+# Enable IPv6 BIG TCP option which increases device's maximum GRO/GSO limits
+# require NICs: mlx4, mlx5 , and following settings
+#  --set routingMode=native \
+#  --set bpf.masquerade=true \
+#  --set kubeProxyReplacement=true
+#enableIPv4BIGTCP: $( if [ "${ENABLE_BIGTCP}" == "true" ] ; then echo "true" ; else echo "false" ; fi )
+#enableIPv6BIGTCP: $( if [ "${ENABLE_BIGTCP}" == "true" ] && [ "${ENABLE_IPV6}" == "true" ] ; then echo "true" ; else echo "false" ; fi )
+
+# sockopt-loadbalancer for kube-proxy replacement
+# TCP and UDP requires a v4.19.57, v5.1.16, v5.2.0 or more recent Linux kernel(5.10+ ? ),The most optimal kernel with the full feature set is v5.8
+socketLB:
+  enabled: true
+  hostNamespaceOnly: false
+
+hubble:
+  enabled: true
+  eventBufferCapacity: 65535
+
+  # eventQueueSize <= defaults.MonitorQueueSizePerCPUMaximum(16384), default to numCPU * 1024
+  eventQueueSize: 16384
+
+  ui:
+    enabled: true
+    service:
+      type: NodePort
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+
+  # hubble.tls :  for mTLS between Hubble server and Hubble Relay
+  tls:
+    enabled: true
+    auto:
+      enabled: true
+      method: cronJob
+      # in days
+      certValidityDuration: 36500
+  
+  relay:
+    enabled: true
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+
+  frontend:
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+
+  metrics:
+    # for more
+    # https://github.com/isovalent/grafana-dashboards/tree/main/dashboards/cilium-policy-verdicts
+    # https://github.com/isovalent/cilium-grafana-observability-demo/blob/main/helm/cilium-values.yaml
+    # https://docs.cilium.io/en/latest/observability/grafana/
+    # 定制 flow 中的 metric
+    enabled: ["dns:query;ignoreAAAA", "drop", "tcp", "flow", "port-distribution", "icmp", "httpV2:exemplars=true;labelsContext=source_ip,source_namespace,source_workload,destination_ip,destination_namespace,destination_workload,traffic_direction"]
+    # enabled: ["dns:query;ignoreAAAA", "drop", "tcp", "flow", "icmp", "http"]
+
+certgen:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+
+clustermesh:
+  useAPIServer: true
+  enableEndpointSliceSynchronization: true
+  enableMCSAPISupport: false
+  apiserver:
+    tls:
+      auto:
+        # in days
+        certValidityDuration: 36500
+    service:
+      type: NodePort
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+
+tls:
+  ca:
+    # in days
+    certValidityDuration: 36500
+
+# operator:
+#   affinity:
+#     nodeAffinity:
+#       requiredDuringSchedulingIgnoredDuringExecution:
+#         nodeSelectorTerms:
+#           - matchExpressions:
+#             - key: node-role.kubernetes.io/control-plane
+#               operator: Exists
