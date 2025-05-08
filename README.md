@@ -26,7 +26,9 @@ cilium/
 
     （1）把整个工程拷贝到 master 节点上, 确保机器上有如下 CLI： helm、kubectl、jq
 
-    （2）确保已经安装了 K8S 集群
+    （2）确保已经安装了 K8S 集群 
+        
+        如果是使用 kubespray 安装集群，可带上 kube_network_plugin=cni 选项
 
 * 步骤2，安装 cilium
 
