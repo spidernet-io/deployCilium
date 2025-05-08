@@ -32,6 +32,16 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+if ! which helm &>/dev/null ; then
+    echo "please install cli: helm"
+    exit 1
+fi
+
+if ! which kubectl &>/dev/null ; then
+    echo "please install cli: kubectl"
+    exit 1
+fi
+
 #=====================   version
 INSTANCE_NAME=${INSTANCE_NAME:-"cilium"}
 NAMESPACE=${NAMESPACE:-"kube-system"}
