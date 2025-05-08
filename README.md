@@ -116,7 +116,7 @@ cilium/
 
 ## 卸载
 
-    ```bash
-    chmod +x ./uninstall.sh
-    ./uninstall.sh
-    ```
+```bash
+chmod +x ./uninstall.sh
+./uninstall.sh
+```
