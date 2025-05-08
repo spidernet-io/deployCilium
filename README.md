@@ -32,7 +32,7 @@ cilium/
 
 2. 安装 cilium
 
-    进入工程的 cilium 子目录下，运行如下命令，它会完成 CLI 的安装，以及 chart 的安装，并且，该脚本执行过程中，也会尝试卸载 calico
+    进入工程的 cilium 子目录下，运行如下命令，它会完成 CLI 的安装，以及 chart 的安装
 
     安装单栈集群
     ```bash
