@@ -45,7 +45,6 @@ cilium/
     CLUSTERMESH_APISERVER_NODEPORT="31001" \
     K8S_API_IP="10.0.1.11" K8S_API_PORT="6443" \
     HUBBLE_WEBUI_NODEPORT_PORT="31000" \
-    DISABLE_KUBE_PROXY="true" \
     ./setup.sh
     ```
 
@@ -57,7 +56,6 @@ cilium/
     CLUSTERMESH_APISERVER_NODEPORT="31001" \
     K8S_API_IP="10.0.1.11" K8S_API_PORT="6443" \
     HUBBLE_WEBUI_NODEPORT_PORT="31000" \
-    DISABLE_KUBE_PROXY="true" \
     ./setup.sh
     ```
 
