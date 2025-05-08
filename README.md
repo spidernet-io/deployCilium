@@ -32,7 +32,11 @@ cilium/
 
 2. 安装 cilium
 
-    进入工程的 cilium 子目录下，运行如下命令，它会完成 CLI 的安装，以及 chart 的安装
+    进入工程的 cilium 子目录下，运行如下命令，它会完成 CLI 的安装，以及 chart 的安装。 
+    
+    使用该方式安装的 cilium，默认工作在 vxlan 模式隧道下，且打开了所有能够兼容的所有其它功能
+
+    它默认从 daocloud 在线仓库拉取镜像
 
     安装单栈集群
     ```bash
