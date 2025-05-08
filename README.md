@@ -22,7 +22,7 @@ cilium/
 
 如下步骤，会安装 cilium 到 k8s 集群中
 
-* 步骤1，准备
+1. 准备
 
     （1）把整个工程拷贝到 master 节点上, 确保机器上有如下 CLI： helm、kubectl、jq
 
@@ -30,7 +30,7 @@ cilium/
         
         如果是使用 kubespray 安装集群，可带上 kube_network_plugin=cni 选项
 
-* 步骤2，安装 cilium
+2. 安装 cilium
 
     进入工程的 cilium 子目录下，运行如下命令，它会完成 CLI 的安装，以及 chart 的安装，并且，该脚本执行过程中，也会尝试卸载 calico
 
@@ -66,14 +66,14 @@ cilium/
 > * HUBBLE_WEBUI_NODEPORT_PORT 是 cilium 的可观测性 GUI 的 nodePort 号，可手动指定一个在合法的 nodePort 范围内的地址（通常在 30000-32767 ）
 > * cilium 遵循 K8S 集群的 clusterIP CIDR 设置。并且，cilium 在实现多集群互联时，允许不同集群的 clusterIP CIDR 是重叠的
 
-* 步骤3，（可选）如有必要，可以杀掉所有的 POD， 让它们快速接入 cilium 的网络
+3. （可选）如有必要，可以杀掉所有的 POD， 让它们快速接入 cilium 的网络
 
     ```bash
     chmod +x restartAllPods.sh
     ./restartAllPods.sh
     ```
 
-* 步骤4，完成 cilium 安装后，可运行如下命令，查看本集群 cilium 的状态
+4. 完成 cilium 安装后，可运行如下命令，查看本集群 cilium 的状态
 
     ```bash
     chmod +x ./showStatus.sh
@@ -82,7 +82,7 @@ cilium/
 
     完成安装后，可通过 CLUSTERMESH_APISERVER_NODEPORT 的 nodePort 访问cilium 的报文可观测性 GUI
 
-* 步骤5，可选，开启 cilium 的指标和 grafana 面板
+5. 可选，开启 cilium 的指标和 grafana 面板
 
     （1）确保安装 grafana 和 prometheus （需要依赖集群中已经安装了 grafana 和 prometheus 的 CRD ）
 
@@ -95,7 +95,7 @@ cilium/
 
     完成指标和观测面板的开启后，即可以在 grafana 上看到 cilium 相关的面板
 
-* 步骤6，可选，实现多集群互联
+6. 可选，实现多集群互联
 
     （1）创建 /root/clustermesh 目录，把所有希望互联的集群的/root/.kube/config 拷贝到该目录下，命名为 /root/clustermesh/cluster1、 /root/clustermesh/cluster2、/root/clustermesh/cluster3 ..... 
 
