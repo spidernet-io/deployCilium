@@ -241,7 +241,8 @@ tls:
     # in days
     certValidityDuration: 36500
 
-# operator:
+operator:
+  replicas: 1
 #   affinity:
 #     nodeAffinity:
 #       requiredDuringSchedulingIgnoredDuringExecution:
