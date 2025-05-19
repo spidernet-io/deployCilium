@@ -1,44 +1,37 @@
 #!/bin/bash
 
-RESTART_MIN=${1:-""}
-if [ -n "$RESTART_MIN" ] && ! expr $RESTART_MIN + 1 &>/dev/null ; then
-    echo "input number"
-    exit 1
-fi
+sandbox_list=$(nerdctl ps | grep pause | awk '{print $1}')
+[ -n "$sandbox_list" ] || {
+    echo "No any sandbox found"
+    exit 0
+}
 
-if [ -z "$RESTART_MIN" ] ; then
-    ALL_PODS=`kubectl get pod -o wide -A | sed '1 d' | awk '{printf "%s,%s=%s\n",$1,$2,$5}' `
-    echo "-------- restart all pods"
-else
-    ALL_PODS=`kubectl get pod -o wide -A | sed '1 d' | grep -v Running | awk '{printf "%s,%s=%s\n",$1,$2,$5}' `
-    echo "-------- restart not-running pods who restarted $RESTART_MIN time at least"
-fi
-[ -n "$ALL_PODS" ]  || exit 1
+echo "-----------------------------------------------------------"
 
-FAILED_FILE=/tmp/failed
-rm -f $FAILED_FILE || true
-
-for LINE in $ALL_PODS ; do
-    NS_NAME=${LINE%=*}
-    NS_NAME=${NS_NAME//,/ }
-    RESTART_NUM=${LINE#*=}
-    if [ -n "$RESTART_MIN" ] && (( RESTART_NUM >= RESTART_MIN )) ; then
-        echo "delete pod $NS_NAME , restart $RESTART_NUM "
-    elif [ -z "$RESTART_MIN" ] ; then
-        echo "delete pod $NS_NAME , restart $RESTART_NUM "
-    else
-        echo "ingore pod $NS_NAME , restart $RESTART_NUM "
+for sandbox in $sandbox_list; do
+    if [ -z "$sandbox" ]; then
         continue
     fi
-    # api server may be down
-    ( kubectl delete pod -n ${NS_NAME} --force --grace-period=0  --wait=false || touch $FAILED_FILE )&
-done
-wait
 
-if [ -f "$FAILED_FILE" ] ; then
-  echo "-------- failed"
-	exit 1
-else
-  echo "-------- succeed"
-	exit 0
-fi
+    ip_address=$(nerdctl inspect $sandbox | jq -r '.[0].NetworkSettings.IPAddress')
+
+    if [ -z "$ip_address" ] || [ "$ip_address" = "null" ]; then
+        continue
+    fi
+
+    if ip addr show | grep "$ip_address" &>/dev/null; then
+        continue
+    fi
+
+    POD_NAME=$(nerdctl inspect $sandbox | jq -r '.[0].Config.Labels."io.kubernetes.pod.name"')
+    POD_NAMESPACE=$(nerdctl inspect $sandbox | jq -r '.[0].Config.Labels."io.kubernetes.pod.namespace"')
+
+    if [ -z "$POD_NAME" ] || [ "$POD_NAME" = "null" ] || [ -z "$POD_NAMESPACE" ] || [ "$POD_NAMESPACE" = "null" ]; then
+        continue
+    fi
+
+    nerdctl stop $sandbox >/dev/null 2>&1
+    echo "Stop sandbox $sandbox for pod $POD_NAMESPACE/$POD_NAME"
+done
+
+echo "✅ All pods have been restarted"
