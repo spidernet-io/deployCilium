@@ -18,15 +18,17 @@ cilium/
 
 其它不相关的文件，请不要关注
 
-## 部署 
+## 部署 Cilium
 
-如下步骤，会安装 cilium 到 k8s 集群中
+如下步骤，会安装 Cilium 到 k8s 集群中。
 
 1. 准备
 
-    （1）把整个工程拷贝到 master 节点上, 确保机器上有如下 CLI： helm、kubectl、jq
+    （1）如果是通过 kubespray 安装新集群，建议配置 `kube_network_plugin=cni` 参数。对于已安装 Calico 的集群，请在 Cilium 安装成功后，参考[卸载 Calico](#卸载-calico) 步骤卸载 Calico。
 
-    （2）确保已经安装了 K8S 集群 
+    （2）把整个工程拷贝到 master 节点上, 确保机器上有如下 CLI： helm、kubectl、jq
+
+    （3）确保已经安装了 K8S 集群 
         
         如果是使用 kubespray 安装集群，可带上 kube_network_plugin=cni 选项
 
@@ -85,12 +87,7 @@ cilium/
 
     完成安装后，可通过 CLUSTERMESH_APISERVER_NODEPORT 的 nodePort 访问cilium 的报文可观测性 GUI
 
-4. （可选）如有必要，可以杀掉所有的 POD， 让它们快速接入 cilium 的网络
-
-    ```bash
-    chmod +x restartAllPods.sh
-    ./restartAllPods.sh
-    ```
+4. 卸载 Calico(可选)。 如果您的集群已经安装 Calico，参考[卸载 Calico](#卸载-calico) 步骤卸载 Calico。
 
 5. (可选) 开启 cilium 的指标和 grafana 面板
 
@@ -124,9 +121,39 @@ cilium/
     ./showClusterMesh.sh
     ```
 
-## 卸载
+## 卸载 Cilium
 
 ```bash
 chmod +x ./uninstall.sh
 ./uninstall.sh
 ```
+
+## 卸载 Calico
+
+1. 首先在**具有 Kubectl 的 Controller 节点**执行以下命令，卸载 Calico K8s 资源：
+
+```
+kubectl get crd | grep projectcalico | awk '{print $1}' | xargs kubectl delete crd || true
+kubectl delete deploy -n kube-system calico-kube-controllers || true
+kubectl delete ds -n kube-system calico-node || true
+kubectl delete sa -n kube-system calico-kube-controllers calico-cni-plugin calico-node || true
+kubectl delete clusterrolebinding calico-cni-plugin calico-kube-controllers calico-node || true
+```
+
+2. 进入到 cilium 子目录，在**每个节点**上执行 `uninstall_calico.sh`，用于清理每个节点上残留的 Calico 网络资源。包括其 CNI 配置文件，iptables 规则等。
+
+```bash
+chmod +x ./uninstall_calico.sh
+./uninstall_calico.sh
+```
+
+3. 为了快速让存量业务 Pod 快速接入到 Cilium 网络中，有以下两种方式：
+
+* 依次重启主机，彻底清除 Calico 的残留网络规则（优先推荐）。
+* 如果无法重启主机，可以在每个节点上执行 `restartAllPods.sh`，这将重启所有 Pod 的 Sandbox 容器，让 Cilium 重新设置 Pod 网络。这不会重启业务容器，不会影响到业务容器的日志等。
+
+```bash
+chmod +x ./restartAllPods.sh
+./restartAllPods.sh
+```
+ 
