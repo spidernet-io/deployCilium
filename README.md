@@ -104,6 +104,8 @@ cilium/
 
 6. (可选) 实现多集群互联
 
+     注：当多个 cilium 集群之间的应用需要通过 nodePort 相互访问，会因为 nodePort 端口冲突，导致 client 集群把 service 解析到本地集群上，出现访问错误。因此，请务必使用该功能互联集群，并使用 service 来进行东西向访问，解决该问题
+   
     （1）创建 /root/clustermesh 目录，把所有希望互联的集群的/root/.kube/config 拷贝到该目录下，命名为 /root/clustermesh/cluster1、 /root/clustermesh/cluster2、/root/clustermesh/cluster3 ..... 
 
     （2）进入本工程的 cilium 子目录，运行如下命令，完成多集群互联的配置
