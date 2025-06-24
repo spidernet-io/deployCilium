@@ -170,4 +170,4 @@ chmod +x ./restartAllPods.sh
 
 - 在使用中，不要同时使用  cilium 和 istio 的 L7 HTTP policy
 
-- 在 istio 使用 sidecar mode with automatic sidecar injection 功能时，如果和 cilium 的 模式一起工作，需要让 istiod pods 运行在 hostNetwork=true 模式，以便能够被 API server 访问
+- 在 istio 使用 sidecar mode with automatic sidecar injection 功能时，如果和 cilium 的 隧道模式（VXLAN or GENEVE）一起工作，需要让 istiod pods 运行在 hostNetwork=true 模式，以便能够被 API server 访问
