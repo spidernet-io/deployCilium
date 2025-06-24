@@ -20,6 +20,7 @@ POD_v4CIDR="172.70.0.0/16" \
     K8S_API_PORT="6443" \
     HUBBLE_WEBUI_NODEPORT_PORT="30000" \
     CLUSTERMESH_APISERVER_NODEPORT="31000" \
+    ENABLE_INTEGRATE_ISTIO="false" \
     ./setup.sh
 
 eof
@@ -81,6 +82,9 @@ CLUSTERMESH_APISERVER_NODEPORT=${CLUSTERMESH_APISERVER_NODEPORT:-"30100"}
 
 ENABLE_gatewayAPI=${ENABLE_gatewayAPI:-"true"}
 
+# https://docs.cilium.io/en/latest/network/servicemesh/istio/
+ENABLE_INTEGRATE_ISTIO=${ENABLE_INTEGRATE_ISTIO:-"false"}
+
 
 echo "INSTANCE_NAME=${INSTANCE_NAME}"
 echo "NAMESPACE=${NAMESPACE}"
@@ -93,6 +97,7 @@ echo "CLUSTER_ID=${CLUSTER_ID}"
 echo "K8S_API_IP=${K8S_API_IP}"
 echo "K8S_API_PORT=${K8S_API_PORT}"
 echo "HUBBLE_WEBUI_NODEPORT_PORT=${HUBBLE_WEBUI_NODEPORT_PORT}"
+echo "ENABLE_INTEGRATE_ISTIO=${ENABLE_INTEGRATE_ISTIO}"
 
 #===================  install CLI 
 
@@ -171,6 +176,12 @@ HELM_OPTIONS+="\
   --set k8sServicePort=${K8S_API_PORT} \
 "
 
+if [ "${ENABLE_INTEGRATE_ISTIO}" == "true" ] ; then
+    HELM_OPTIONS+="\
+      --set socketLB.hostNamespaceOnly=true \
+      --set cni.exclusive=false \
+    "
+fi
 
 helm install  cilium ${CHART_PATH} --debug  --atomic --version $CILIUM_VERSION  --timeout 20m \
   --namespace ${NAMESPACE}  \
