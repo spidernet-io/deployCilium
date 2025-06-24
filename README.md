@@ -50,6 +50,7 @@ cilium/
     export K8S_API_IP="10.0.1.11"
     export K8S_API_PORT="6443"
     export HUBBLE_WEBUI_NODEPORT_PORT="31000"
+    export INTEGRATE_ISTIO="false"
     ./setup.sh
     ```
 
@@ -66,6 +67,7 @@ cilium/
     export K8S_API_IP="10.0.1.11"
     export K8S_API_PORT="6443"
     export HUBBLE_WEBUI_NODEPORT_PORT="31000"
+    export INTEGRATE_ISTIO="false"
     ./setup.sh
     ```
 
@@ -77,6 +79,7 @@ cilium/
 > * K8S_API_IP 和 K8S_API_PORT 表示本集群 Kubernetes API 服务器的地址，它用于在不需要 kube-proxy 时，cilium 也能访问 api server，为集群提供 service 能力。因此，这个地址不能是 clusterIP，而必须是单个主机的 Kubernetes API 服务器的物理地址，或者通过 keepalived 等工具实现的高可用地址。
 > * HUBBLE_WEBUI_NODEPORT_PORT 是 cilium 的可观测性 GUI 的 nodePort 号，可手动指定一个在合法的 nodePort 范围内的地址（通常在 30000-32767 ）
 > * cilium 遵循 K8S 集群的 clusterIP CIDR 设置。并且，cilium 在实现多集群互联时，允许不同集群的 clusterIP CIDR 是重叠的
+> * INTEGRATE_ISTIO 表示是否 istio 会工作在 cilium 网络中，如果是 true ，会为调优 cilium 的工作参数
 
 3. 完成 cilium 安装后，可运行如下命令，查看本集群 cilium 的状态
 
@@ -159,3 +162,12 @@ chmod +x ./restartAllPods.sh
 ./restartAllPods.sh
 ```
  
+## cilium 和 istio 一起工作 
+
+当 istion 和 cilium 一起工作时， [官方文档](https://docs.cilium.io/en/latest/network/servicemesh/istio/) 说明需要进行双方的参数适配
+
+- 在 cilium 安装过程中，打开 export INTEGRATE_ISTIO="true" 参数，会调整 cilium 的工作参数
+
+- 在使用中，不要同时使用  cilium 和 istio 的 L7 HTTP policy
+
+- 在 istio 使用 sidecar mode with automatic sidecar injection 功能时，如果和 cilium 的 隧道模式（VXLAN or GENEVE）一起工作，需要让 istiod pods 运行在 hostNetwork=true 模式，以便能够被 API server 访问
