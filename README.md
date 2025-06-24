@@ -166,7 +166,7 @@ chmod +x ./restartAllPods.sh
 
 当 istion 和 cilium 一起工作时， [官方文档](https://docs.cilium.io/en/latest/network/servicemesh/istio/) 说明需要进行双方的参数适配
 
-- 在 cilium 安装过程中，打开 export INTEGRATE_ISTIO="true" 参数，讲调整 cilium 的工作参数
+- 在 cilium 安装过程中，打开 export INTEGRATE_ISTIO="true" 参数，会调整 cilium 的工作参数
 
 - 在使用中，不要同时使用  cilium 和 istio 的 L7 HTTP policy
 
