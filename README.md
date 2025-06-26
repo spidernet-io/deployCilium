@@ -30,7 +30,9 @@ cilium/
 
     （3）确保已经安装了 K8S 集群 
         
-        如果是使用 kubespray 安装集群，可带上 kube_network_plugin=cni 选项
+        如果是使用 kubespray 安装集群，指定 kube_network_plugin=cni 和 kube_proxy_remove=true 选项
+
+     （4）留意 cilium 官方的 [系统要求](https://docs.cilium.io/en/stable/operations/system_requirements/#admin-system-reqs)   
 
 2. 安装 cilium
 
@@ -90,9 +92,36 @@ cilium/
 
     完成安装后，可通过 CLUSTERMESH_APISERVER_NODEPORT 的 nodePort 访问cilium 的报文可观测性 GUI
 
-4. 卸载 Calico(可选)。 如果您的集群已经安装 Calico，参考[卸载 Calico](#卸载-calico) 步骤卸载 Calico。
+4. (可选) 卸载 Calico
 
-5. (可选) 开启 cilium 的指标和 grafana 面板
+    如果您的集群已经安装 Calico，参考[卸载 Calico](#卸载-calico) 步骤卸载 Calico。
+
+5. (可选) 卸载 kube-proxy
+
+    cilium 按照 kube-proxy replacement 方式在工作，因此，如果集群中还在运行 kube-proxy，其已经无任何作用了，可进行卸载
+
+```bash
+    # 替换 kube proxy 启动命令，使其清理各种主机规则
+    kubectl patch daemonset kube-proxy -n kube-system --type='json' -p='[
+      {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/0/command",
+        "value": [
+          "/usr/local/bin/kube-proxy",
+          "--cleanup"
+        ]
+      }
+    ]'
+
+    # 等待 kube proxy 的所有pod 重启 运行退出后，即可卸载 
+    kubectl delete daemonset kube-proxy -n kube-system
+    
+    # 或者修改 nodename，使其不运行在任何节点上
+    # kubectl patch daemonset kube-proxy -n kube-system --type='json' -p='[{"op": "add", "path": "/spec/template/spec/nodeName", "value": "notexsitednode"}]'
+
+```        
+
+6. (可选) 开启 cilium 的指标和 grafana 面板
 
     （1）确保安装 grafana 和 prometheus （需要依赖集群中已经安装了 grafana 和 prometheus 的 CRD ）
 
@@ -105,7 +134,7 @@ cilium/
 
     完成指标和观测面板的开启后，即可以在 grafana 上看到 cilium 相关的面板
 
-6. (可选) 实现多集群互联
+7. (可选) 实现多集群互联
 
      注：当多个 cilium 集群之间的应用需要通过 nodePort 相互访问，会因为 nodePort 端口冲突，导致 client 集群把 service 解析到本地集群上，出现访问错误。因此，请务必使用该功能互联集群，并使用 service 来进行东西向访问，解决该问题
    
