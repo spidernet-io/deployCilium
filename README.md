@@ -27,6 +27,7 @@ cilium/
     （1）如果是通过 kubespray 安装新集群，建议配置 `kube_network_plugin=cni` 参数。对于已安装 Calico 的集群，请在 Cilium 安装成功后，参考[卸载 Calico](#卸载-calico) 步骤卸载 Calico。
 
     （2）把整个工程拷贝到 master 节点上, 确保机器上有如下 CLI： helm、kubectl、jq
+        注意: helm 版本最好高于 v3.17.3 ( 测试过 v3.9.4 就出现和 cilium chart 的语法兼容问题)
 
     （3）确保已经安装了 K8S 集群 
         
