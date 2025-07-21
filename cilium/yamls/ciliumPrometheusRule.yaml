@@ -1,9 +1,9 @@
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
-  name: cilium-monitoring-rules
+  name: cilium-dce-rules
   # 需要设置在 prometheus 的 namespace 下
-  namespace: kube-system
+  @ namespace: kube-system
   labels:
     app.kubernetes.io/name: cilium
     app.kubernetes.io/component: monitoring

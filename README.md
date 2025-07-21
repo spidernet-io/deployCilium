@@ -143,6 +143,8 @@ cilium/
 
     ```bash
     kubectl apply -n <Insight 租户> -f ./cilium/yamls/ciliumGrafana.yaml
+
+    # 重启 grafana pod
     ```
 
 7. (可选) 实现多集群互联
