@@ -1,341 +1,284 @@
-# based on cilium v1.17.5
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
-  name: cilium-monitoring-alerts
+  name: cilium-monitoring-rules
+  # 需要设置在 prometheus 的 namespace 下
   namespace: kube-system
   labels:
-    app: cilium
+    app.kubernetes.io/name: cilium
+    app.kubernetes.io/component: monitoring
     prometheus: kube-prometheus
     role: alert-rules
     # required by dce insight
     operator.insight.io/managed-by: insight
 spec:
   groups:
-  # ========================================
-  # Cilium组件健康状态告警规则 (基础版本)
-  # ========================================
-  - name: cilium.component.health
+  - name: cilium.agent.rules
     interval: 30s
     rules:
-    # P0级别 - 立即响应
+    # Agent 状态告警
     - alert: CiliumAgentDown
       expr: up{job="cilium-agent"} == 0
       for: 1m
       labels:
         severity: critical
         component: cilium-agent
-        priority: P0
       annotations:
-        summary: "Cilium agent is down on {{ $labels.instance }}"
-        description: "Cilium agent has been down for more than 1 minute on node {{ $labels.instance }}. This will cause network connectivity issues."
-        runbook_url: "https://docs.cilium.io/en/stable/operations/troubleshooting/"
+        summary: "Cilium Agent 实例下线"
+        description: "节点 {{ $labels.node }} 上的 Cilium Agent 已经下线超过 1 分钟"
 
+    - alert: CiliumAgentErrorRateHigh
+      expr: sum(rate(cilium_errors_warnings_total{level="error"}[5m])) by (node) > 0.1
+      for: 2m
+      labels:
+        severity: warning
+        component: cilium-agent
+      annotations:
+        summary: "Cilium Agent 错误率过高"
+        description: "节点 {{ $labels.node }} 上的 Cilium Agent 错误率为 {{ $value }} 错误/秒，持续 2 分钟"
+
+    - alert: CiliumUnreachableNodesHigh
+      expr: cilium_unreachable_nodes > 1
+      for: 5m
+      labels:
+        severity: warning
+        component: cilium-agent
+      annotations:
+        summary: "Cilium 不可达节点数量过多"
+        description: "节点 {{ $labels.node }} 上的 Cilium Agent 检测到 {{ $value }} 个不可达节点，持续 5 分钟"
+
+    - alert: CiliumUnreachableEndpointsHigh
+      expr: cilium_unreachable_health_endpoints > 5
+      for: 5m
+      labels:
+        severity: warning
+        component: cilium-agent
+      annotations:
+        summary: "Cilium 不可达端点数量过多"
+        description: "节点 {{ $labels.node }} 上的 Cilium Agent 检测到 {{ $value }} 个不可达健康端点，持续 5 分钟"
+
+    - alert: CiliumHealthzAPISlowResponse
+      expr: sum(rate(cilium_agent_api_process_time_seconds_sum{path="/v1/healthz"}[5m])) by (node) / sum(rate(cilium_agent_api_process_time_seconds_count{path="/v1/healthz"}[5m])) by (node) > 1
+      for: 3m
+      labels:
+        severity: warning
+        component: cilium-agent
+      annotations:
+        summary: "Cilium Agent healthz API 响应缓慢"
+        description: "节点 {{ $labels.node }} 上的 Cilium Agent healthz API 平均响应时间为 {{ $value }}秒，超过 1 秒阈值"
+
+    - alert: CiliumBPFProgramLoadFailure
+      expr: count(cilium_bpf_progs == 0) > 0
+      for: 1m
+      labels:
+        severity: critical
+        component: cilium-agent
+      annotations:
+        summary: "Cilium BPF 程序加载失败"
+        description: "有 {{ $value }} 个 Cilium Agent 节点的 BPF 程序加载异常"
+
+  - name: cilium.operator.rules
+    interval: 30s
+    rules:
+    # Operator 状态告警
     - alert: CiliumOperatorDown
       expr: up{job="cilium-operator"} == 0
       for: 1m
       labels:
         severity: critical
         component: cilium-operator
-        priority: P0
       annotations:
-        summary: "Cilium operator is down"
-        description: "Cilium operator has been down for more than 1 minute. This will affect cluster-wide network policy and service management."
+        summary: "Cilium Operator 实例下线"
+        description: "Cilium Operator 实例 {{ $labels.pod }} 已经下线超过 1 分钟"
 
-    # P1级别 - 快速响应
-    - alert: CiliumControllersFailing
-      expr: cilium_controllers_failing > 0
-      for: 5m
+    - alert: CiliumOperatorErrorRateHigh
+      expr: sum(rate(cilium_operator_errors_warnings_total{level="error"}[5m])) by (pod) > 0.05
+      for: 2m
       labels:
         severity: warning
-        component: cilium-agent
-        priority: P1
+        component: cilium-operator
       annotations:
-        summary: "{{ $value }} Cilium controllers are failing on {{ $labels.instance }}"
-        description: "{{ $value }} Cilium controllers have been failing for more than 5 minutes on {{ $labels.instance }}. This may impact network functionality."
+        summary: "Cilium Operator 错误率过高"
+        description: "Cilium Operator 实例 {{ $labels.pod }} 错误率为 {{ $value }} 错误/秒，持续 2 分钟"
 
-    - alert: CiliumHighCPUUsage
-      expr: rate(cilium_process_cpu_seconds_total[5m]) > 0.8
-      for: 10m
+    - alert: CiliumLBIPAMServiceUnsatisfied
+      expr: sum(cilium_operator_lbipam_services_unsatisfied) > 5
+      for: 3m
       labels:
         severity: warning
-        component: cilium-agent
-        priority: P1
+        component: cilium-operator
       annotations:
-        summary: "Cilium agent high CPU usage on {{ $labels.instance }}"
-        description: "Cilium agent CPU usage is {{ $value }} (>80%) on {{ $labels.instance }} for more than 10 minutes."
+        summary: "LB IPAM 未能分配 IP 的服务过多"
+        description: "有 {{ $value }} 个服务未能获得 LoadBalancer IP 地址，持续 3 分钟"
 
-    - alert: CiliumHighMemoryUsage
-      expr: cilium_process_resident_memory_bytes > 2147483648
-      for: 10m
-      labels:
-        severity: warning
-        component: cilium-agent
-        priority: P1
-      annotations:
-        summary: "Cilium agent high memory usage on {{ $labels.instance }}"
-        description: "Cilium agent memory usage is {{ $value }} bytes (>2GB) on {{ $labels.instance }} for more than 10 minutes."
-
-  # ========================================
-  # Endpoint和策略管理告警规则
-  # ========================================
-  - name: cilium.endpoint.policy
+  - name: cilium.network.rules
     interval: 30s
     rules:
-    - alert: CiliumEndpointRegenerationHigh
-      expr: rate(cilium_endpoint_regenerations_total[5m]) > 10
-      for: 5m
-      labels:
-        severity: warning
-        component: cilium-agent
-        priority: P1
-      annotations:
-        summary: "High endpoint regeneration rate on {{ $labels.instance }}"
-        description: "Endpoint regeneration rate is {{ $value }} per second on {{ $labels.instance }}, which may indicate configuration instability."
-
-    - alert: CiliumEndpointRegenerationSlow
-      expr: histogram_quantile(0.95, rate(cilium_endpoint_regeneration_time_stats_seconds_bucket[5m])) > 30
-      for: 5m
-      labels:
-        severity: warning
-        component: cilium-agent
-        priority: P1
-      annotations:
-        summary: "Slow endpoint regeneration on {{ $labels.instance }}"
-        description: "95th percentile endpoint regeneration time is {{ $value }} seconds on {{ $labels.instance }}, which is slower than expected."
-
-    - alert: CiliumPolicyChangeFailed
-      expr: increase(cilium_policy_change_total{outcome="failure"}[5m]) > 0
-      for: 1m
-      labels:
-        severity: warning
-        component: cilium-agent
-        priority: P1
-      annotations:
-        summary: "Cilium policy change failed on {{ $labels.instance }}"
-        description: "{{ $value }} policy changes have failed in the last 5 minutes on {{ $labels.instance }}."
-
-  # ========================================
-  # 业务通信异常告警规则
-  # ========================================
-  - name: cilium.network.communication
-    interval: 30s
-    rules:
-    # P0级别 - 立即响应
-    - alert: CiliumHighPacketDropRate
-      expr: rate(hubble_drop_total[5m]) > 1000
+    # 网络相关告警 - 高优先级丢包原因
+    - alert: CiliumDropConnectionTrackingFailure
+      expr: sum(rate(hubble_drop_total{reason=~"CT_MAP_INSERTION_FAILED|CT_TRUNCATED_OR_INVALID_HEADER|CT_NO_MAP_FOUND"}[5m])) by (reason, node) > 1
       for: 2m
       labels:
         severity: critical
-        component: network
-        priority: P0
+        component: cilium-network
+        drop_category: connection_tracking
       annotations:
-        summary: "High packet drop rate detected"
-        description: "Packet drop rate is {{ $value }} per second, which indicates serious network issues."
+        summary: "Cilium 连接跟踪相关丢包严重"
+        description: "节点 {{ $labels.node }} 上由于 {{ $labels.reason }} 导致的丢包率为 {{ $value }} 包/秒，连接跟踪可能存在问题"
 
-    - alert: CiliumPolicyDeniedTrafficHigh
-      expr: rate(hubble_drop_total{reason="Policy denied"}[5m]) > 100
-      for: 1m
+    - alert: CiliumDropServiceLoadBalancingFailure
+      expr: sum(rate(hubble_drop_total{reason=~"SERVICE_BACKEND_NOT_FOUND|DENIED_BY_LB_SRC_RANGE_CHECK"}[5m])) by (reason, node) > 1
+      for: 2m
       labels:
-        severity: warning
-        component: network-policy
-        priority: P1
+        severity: critical
+        component: cilium-network
+        drop_category: service_lb
       annotations:
-        summary: "High policy denied traffic"
-        description: "Policy denied traffic rate is {{ $value }} per second, which may indicate misconfigured network policies."
+        summary: "Cilium 服务负载均衡相关丢包严重"
+        description: "节点 {{ $labels.node }} 上由于 {{ $labels.reason }} 导致的丢包率为 {{ $value }} 包/秒，服务配置可能存在问题"
 
-    # P1级别 - 快速响应
-    - alert: CiliumConntrackTableFull
-      expr: cilium_datapath_conntrack_gc_entries > 1000000
+    - alert: CiliumDropNetworkConfigFailure
+      expr: sum(rate(hubble_drop_total{reason=~"FIB_LOOKUP_FAILED|NO_EGRESS_GATEWAY"}[5m])) by (reason, node) > 1
+      for: 3m
+      labels:
+        severity: critical
+        component: cilium-network
+        drop_category: network_config
+      annotations:
+        summary: "Cilium 网络配置相关丢包严重"
+        description: "节点 {{ $labels.node }} 上由于 {{ $labels.reason }} 导致的丢包率为 {{ $value }} 包/秒，网络路由或配置存在问题"
+
+    # 中等优先级丢包原因
+    - alert: CiliumDropRateLimitingIssue
+      expr: sum(rate(hubble_drop_total{reason=~"DROP_RATE_LIMITED|REACHED_EDT_RATE_LIMITING_DROP_HORIZON"}[5m])) by (reason, node) > 5
       for: 5m
       labels:
         severity: warning
-        component: datapath
-        priority: P1
+        component: cilium-network
+        drop_category: rate_limiting
       annotations:
-        summary: "Connection tracking table is getting full on {{ $labels.instance }}"
-        description: "Connection tracking table has {{ $value }} entries on {{ $labels.instance }}, approaching capacity limits."
+        summary: "Cilium 速率限制丢包"
+        description: "节点 {{ $labels.node }} 上由于 {{ $labels.reason }} 导致的丢包率为 {{ $value }} 包/秒，可能需要调整速率限制配置"
 
-    - alert: CiliumNATTableFull
-      expr: cilium_nat_gc_entries > 500000
-      for: 5m
+    - alert: CiliumDropDataPathNotReady
+      expr: sum(rate(hubble_drop_total{reason=~"DROP_HOST_NOT_READY|DROP_EP_NOT_READY"}[5m])) by (reason, node) > 2
+      for: 3m
       labels:
         severity: warning
-        component: datapath
-        priority: P1
+        component: cilium-network
+        drop_category: datapath_readiness
       annotations:
-        summary: "NAT table is getting full on {{ $labels.instance }}"
-        description: "NAT table has {{ $value }} entries on {{ $labels.instance }}, approaching capacity limits."
+        summary: "Cilium 数据路径未就绪丢包"
+        description: "节点 {{ $labels.node }} 上由于 {{ $labels.reason }} 导致的丢包率为 {{ $value }} 包/秒，数据路径可能尚未完全就绪"
 
-    - alert: CiliumServiceUnavailable
-      expr: cilium_operator_lbipam_services_unsatisfied > 0
+    - alert: CiliumPolicyChangeFailureHigh
+      expr: sum(rate(cilium_policy_change_total{outcome="failure"}[5m])) by (node) > 0.1
       for: 2m
       labels:
         severity: warning
-        component: load-balancer
-        priority: P1
+        component: cilium-policy
       annotations:
-        summary: "{{ $value }} services are unsatisfied"
-        description: "{{ $value }} LoadBalancer services did not receive all requested IPs."
+        summary: "Cilium 网络策略变更失败率过高"
+        description: "节点 {{ $labels.node }} 上的网络策略变更失败率为 {{ $value }} 次/秒，持续 2 分钟"
 
-  # ========================================
-  # eBPF和数据路径告警规则
-  # ========================================
-  - name: cilium.datapath.ebpf
+    - alert: CiliumEndpointDisconnecting
+      expr: sum(cilium_endpoint_state{endpoint_state="disconnecting"}) by (node) > 10
+      for: 5m
+      labels:
+        severity: warning
+        component: cilium-network
+      annotations:
+        summary: "Cilium 端点连接异常数量过多"
+        description: "节点 {{ $labels.node }} 上有 {{ $value }} 个端点处于断开连接状态，持续 5 分钟"
+
+  - name: cilium.resources.rules
     interval: 30s
     rules:
+    # 资源相关告警
     - alert: CiliumBPFMapPressureHigh
-      expr: cilium_bpf_map_pressure > 0.8
-      for: 5m
+      expr: max(cilium_bpf_map_pressure) by (node) > 0.8
+      for: 3m
       labels:
         severity: warning
-        component: datapath
-        priority: P1
+        component: cilium-ebpf
       annotations:
-        summary: "High BPF map pressure on {{ $labels.instance }}"
-        description: "BPF map pressure is {{ $value }} (>80%) on {{ $labels.instance }}, which may cause map operation failures."
+        summary: "Cilium eBPF Map 存储压力过高"
+        description: "节点 {{ $labels.node }} 上的 eBPF Map 存储压力为 {{ $value | humanizePercentage }}，超过 80%"
 
-    - alert: CiliumConntrackGCFailures
-      expr: rate(cilium_datapath_conntrack_gc_key_fallbacks_total[5m]) > 100
-      for: 5m
+    - alert: CiliumBPFMapPressureCritical
+      expr: max(cilium_bpf_map_pressure) by (node) > 0.95
+      for: 1m
+      labels:
+        severity: critical
+        component: cilium-ebpf
+      annotations:
+        summary: "Cilium eBPF Map 存储压力严重"
+        description: "节点 {{ $labels.node }} 上的 eBPF Map 存储压力为 {{ $value | humanizePercentage }}，超过 95%，可能影响网络功能"
+
+    - alert: CiliumBPFMapOperationFailureRateHigh
+      expr: sum(rate(cilium_bpf_map_ops_total{outcome!="success"}[5m])) by (node) > 1
+      for: 3m
       labels:
         severity: warning
-        component: datapath
-        priority: P1
+        component: cilium-ebpf
       annotations:
-        summary: "High connection tracking GC fallback rate on {{ $labels.instance }}"
-        description: "Connection tracking GC fallback rate is {{ $value }} per second on {{ $labels.instance }}."
+        summary: "Cilium eBPF Map 操作失败率过高"
+        description: "节点 {{ $labels.node }} 上的 eBPF Map 操作失败率为 {{ $value }} 次/秒，持续 3 分钟"
 
-  # ========================================
-  # Hubble观测性告警规则
-  # ========================================
-  - name: cilium.hubble.observability
-    interval: 30s
-    rules:
-    - alert: HubbleEventsLost
-      expr: rate(hubble_lost_events_total[5m]) > 100
-      for: 2m
-      labels:
-        severity: warning
-        component: hubble
-        priority: P1
-      annotations:
-        summary: "Hubble is losing events on {{ $labels.instance }}"
-        description: "Hubble event loss rate is {{ $value }} per second on {{ $labels.instance }}. Consider increasing queue size or provisioning more CPU."
-
-    - alert: HubbleRingBufferFull
-      expr: hubble_ring_buffer_utilization > 0.9
-      for: 5m
-      labels:
-        severity: warning
-        component: hubble
-        priority: P1
-      annotations:
-        summary: "Hubble ring buffer utilization high on {{ $labels.instance }}"
-        description: "Hubble ring buffer utilization is {{ $value }} (>90%) on {{ $labels.instance }}."
-
-  # ========================================
-  # 性能和容量告警规则
-  # ========================================
-  - name: cilium.performance.capacity
-    interval: 60s
-    rules:
-    - alert: CiliumSlowUpstreamResponse
-      expr: histogram_quantile(0.95, rate(cilium_proxy_upstream_reply_seconds_bucket[5m])) > 5
-      for: 5m
-      labels:
-        severity: warning
-        component: proxy
-        priority: P2
-      annotations:
-        summary: "Slow upstream response time"
-        description: "95th percentile upstream response time is {{ $value }} seconds, which is slower than expected."
-
-    - alert: CiliumLoadBalancerIPShortage
-      expr: cilium_operator_lbipam_ips_available < 10
-      for: 5m
-      labels:
-        severity: warning
-        component: load-balancer
-        priority: P1
-      annotations:
-        summary: "LoadBalancer IP pool running low"
-        description: "Only {{ $value }} IP addresses available in LoadBalancer IP pool. Consider expanding the pool."
-
-    - alert: CiliumDNSPolicyDeniedHigh
-      expr: rate(cilium_policy_l7_total{rule="dns",verdict="denied"}[5m]) > 100
-      for: 2m
-      labels:
-        severity: warning
-        component: dns-policy
-        priority: P1
-      annotations:
-        summary: "High DNS policy denied rate"
-        description: "DNS policy denied rate is {{ $value }} per second, which may indicate DNS policy misconfigurations."
-
-  # ========================================
-  # 节点和网络连通性告警规则
-  # ========================================
-  - name: cilium.node.connectivity
-    interval: 30s
-    rules:
-    - alert: CiliumNodeUnreachable
-      expr: cilium_unreachable_nodes > 0
+    - alert: CiliumIPPoolUtilizationCritical
+      expr: (sum(cilium_ip_addresses{family="ipv4"}) by (node)) / (sum(cilium_ipam_capacity{family="ipv4"}) by (node)) > 0.9
       for: 2m
       labels:
         severity: critical
-        component: node-connectivity
-        priority: P0
+        component: cilium-ipam
       annotations:
-        summary: "{{ $value }} Cilium nodes are unreachable"
-        description: "{{ $value }} nodes are unreachable from {{ $labels.instance }}, indicating network connectivity issues."
+        summary: "Cilium IP 池使用率严重"
+        description: "节点 {{ $labels.node }} 上的 IP 池使用率为 {{ $value | humanizePercentage }}，超过 90%，可能导致 Pod 创建失败"
 
-    - alert: CiliumHealthEndpointUnreachable
-      expr: cilium_unreachable_health_endpoints > 0
-      for: 2m
-      labels:
-        severity: warning
-        component: health-check
-        priority: P1
-      annotations:
-        summary: "{{ $value }} health endpoints are unreachable"
-        description: "{{ $value }} health endpoints are unreachable from {{ $labels.instance }}."
-
-  # ========================================
-  # 资源配额和限制告警规则
-  # ========================================
-  - name: cilium.resource.limits
-    interval: 60s
+  - name: cilium.cluster.rules
+    interval: 30s
     rules:
-    - alert: CiliumIdentityAllocationNearLimit
-      expr: cilium_identity > 60000
-      for: 5m
+    # 集群相关告警
+    - alert: CiliumClusterMeshFailureHigh
+      expr: sum(cilium_clustermesh_remote_cluster_failures) by (node) > 0
+      for: 3m
       labels:
         severity: warning
-        component: identity-allocation
-        priority: P1
+        component: cilium-clustermesh
       annotations:
-        summary: "Identity allocation approaching limit"
-        description: "Current identity allocation is {{ $value }}, approaching the maximum limit of 65535."
+        summary: "Cilium 集群网格连接失败"
+        description: "节点 {{ $labels.node }} 上有 {{ $value }} 个远程集群连接失败，持续 3 分钟"
 
-    - alert: CiliumEndpointCountHigh
-      expr: cilium_endpoint > 5000
-      for: 10m
+    - alert: HubbleLostEventsHigh
+      expr: sum(rate(hubble_lost_events_total[5m])) by (node) > 100
+      for: 3m
       labels:
         severity: warning
-        component: endpoint-management
-        priority: P2
+        component: hubble
       annotations:
-        summary: "High endpoint count on {{ $labels.instance }}"
-        description: "Endpoint count is {{ $value }} on {{ $labels.instance }}, which may impact performance."
+        summary: "Hubble 丢失事件过多"
+        description: "节点 {{ $labels.node }} 上的 Hubble 丢失事件率为 {{ $value }} 事件/秒，持续 3 分钟"
 
-    - alert: CiliumPolicyCountHigh
-      expr: cilium_policy > 1000
-      for: 10m
+  - name: cilium.availability.rules
+    interval: 30s
+    rules:
+    # 可用性相关告警
+    - alert: CiliumAgentRestartFrequent
+      expr: increase(kube_pod_container_status_restarts_total{container="cilium-agent"}[1h]) > 3
+      for: 0m
       labels:
         severity: warning
-        component: policy-management
-        priority: P2
+        component: cilium-agent
       annotations:
-        summary: "High policy count on {{ $labels.instance }}"
-        description: "Policy count is {{ $value }} on {{ $labels.instance }}, which may impact performance."
+        summary: "Cilium Agent 频繁重启"
+        description: "Pod {{ $labels.pod }} 在过去 1 小时内重启了 {{ $value }} 次"
+
+    - alert: CiliumOperatorRestartFrequent
+      expr: increase(kube_pod_container_status_restarts_total{container="cilium-operator"}[1h]) > 2
+      for: 0m
+      labels:
+        severity: warning
+        component: cilium-operator
+      annotations:
+        summary: "Cilium Operator 频繁重启"
+        description: "Pod {{ $labels.pod }} 在过去 1 小时内重启了 {{ $value }} 次"

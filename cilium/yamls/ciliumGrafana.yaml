@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: cilium-production-dashboard
+  name: cilium-dce-dashboard
   namespace: kube-system
   labels:
     grafana_dashboard: "1"
