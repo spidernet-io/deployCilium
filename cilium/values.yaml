@@ -109,9 +109,6 @@ loadBalancer:
   # Cannot use NodePort acceleration with tunneling
   acceleration: "disabled"
 
-externalIPs:
-  enabled: true
-
 nodePort:
   enabled: true
 

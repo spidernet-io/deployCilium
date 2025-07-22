@@ -2,7 +2,7 @@
 
 # !!!!!!!!!!
 # https://github.com/cilium/cilium/releases
-CILIUM_VERSION=${CILIUM_VERSION:-"1.17.5"}
+CILIUM_VERSION=${CILIUM_VERSION:-"1.17.6"}
 
 # v1.17.0 支持 gatewayAPI v1.2.0 
 # https://docs.cilium.io/en/latest/network/servicemesh/gateway-api/gateway-api/
