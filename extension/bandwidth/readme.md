@@ -51,8 +51,8 @@ EOF
 ```shell
 # 注意，macvlan pod 中的网卡 不能生效 Loadbalancer ip 地址
 # ingress-ip 是 istio gateway 的 Loadbalancer ip
-# via-ip 是 宿主机的 ip
-# via-mac 是本pod 在宿主机侧的 veth 网卡的 mac
+# via-ip 是 宿主机的 kubelet ip
+# via-mac 是本pod 在宿主机侧的 veth 网卡的 mac , 可选，在 spiderpool 场景下，会尝试自动检测
 # total-bandwidth 设置集群总的入口带宽 ， 单位是 Mbit 或者 Gbit
 # tc-rule 设置一个 istio gateway 的 Loadbalancer ip 入口 端口的限流规则，格式 "port[,port]...:bandwidth"
 
@@ -61,7 +61,6 @@ EOF
  	--ingress-interface "eth0" \
  	--egress-interface "veth0" \
  	--via-ip "172.16.13.11" \
- 	--via-mac "08:00:27:bb:01:14" \
  	--total-bandwidth "300Mbit" \
  	--tc-rule "80:10Mbit"  \
  	--tc-rule "443,900:20Mbit"
@@ -154,5 +153,26 @@ kubectl -n kube-system exec ds/cilium -- cilium-dbg bpf egress list
      --egress-total-bandwidth "1Gbit" \
      --egress-ip-bandwidth "172.16.1.49:200Mbit" \
      --egress-ip-bandwidth "172.16.1.50,172.16.1.51:300Mbit"
+```
+
+## 未来todo
+
+搞一个 crd 实例，实现租户的带宽配置, 相应的 controller 生效配置到 macvlan pod、CiliumEgressGatewayPolicy 和 egressGateway node
+
+```yaml
+spec:
+    # 用于拿取 Loadbalancer IP
+    ingressServiceName: istio-gateway
+    ingressServiceNs: istio-system
+    ingressTotalBandwidth: 10Gbit
+    egressTotalBandwidth: 10Gbit
+    egressNode: worker10
+    egressInterface: eth1
+    tenant:
+      - name: tenant1
+        ingressPort: 4000
+        ingressBandwidth: 300Mbit
+        egressIP: 172.16.1.49
+        egressBandwidth: 200Mbit
 ```
 

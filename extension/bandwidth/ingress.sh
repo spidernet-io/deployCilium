@@ -206,8 +206,11 @@ validate_parameters() {
     fi
 
     if [[ -z "$VIA_MAC" ]]; then
-        echo "[ERROR] Missing required parameter: --via-mac" >&2
-        errors=1
+        VIA_MAC=$(ip n | grep "$VIA_IP " | awk '{print $5}')
+        if [[ -z "$VIA_MAC" ]]; then
+            echo "[ERROR] Missing required parameter: --via-mac" >&2
+            errors=1
+        fi
     fi
 
     if [[ -z "$TOTAL_BANDWIDTH" ]]; then
