@@ -44,9 +44,8 @@ spec:
 EOF
 ```
 
-3. 在入口流量节点 ingressNode 上启动一个 spiderpool 的 macvlan pod （该 pod yaml 需要设置  privileged=true ），它内部具有一张 macvlan 和 veth 网卡
-    在 macvlan 网卡内部 运行如下脚本 ingress.sh 
-
+3. 在入口流量节点 ingressNode 上启动一个 spiderpool 的 macvlan pod （ 纯 macvlan 单网卡，不需要和 cilium 搭配 双 网卡；且 该 pod yaml 需要设置  privileged=true ），并且 该 pod ip 不能是 Loadbalancer ip 池中的 ip
+    在 macvlan pod 内部 运行如下脚本 ingress.sh 
 
 
 ```shell
