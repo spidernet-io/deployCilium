@@ -62,7 +62,9 @@ bandwidthManager:
   enabled: true
 
 hostFirewall:
-  enabled: true
+  # maybe lead to installment failure on some kernel
+  # https://github.com/cilium/cilium/issues/38967
+  enabled: false
 
 localRedirectPolicy: true
 
@@ -106,9 +108,6 @@ loadBalancer:
   # loadBalancer.acceleration = native , for xdp nodeport
   # Cannot use NodePort acceleration with tunneling
   acceleration: "disabled"
-
-externalIPs:
-  enabled: true
 
 nodePort:
   enabled: true

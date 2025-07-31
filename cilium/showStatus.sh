@@ -1,17 +1,15 @@
 #!/bin/bash
 
-
 CILIUM_NS="kube-system"
 AGENT_PODS=$( kubectl get pods -n ${CILIUM_NS} -l app.kubernetes.io/name=cilium-agent | sed '1d' | awk '{ print $1}' )
-
 
 echo "===================================== cilium pod ==================================="
 kubectl get pods -n ${CILIUM_NS} -l app.kubernetes.io/part-of=cilium
 
 echo ""
 echo "===================================== cilium summary ==================================="
-cilium status
 
+cilium status
 
 if ! hubble status &>/dev/null ; then
     cilium hubble port-forward &
@@ -52,7 +50,6 @@ kubectl get CiliumClusterwideNetworkPolicy
 kubectl get networkpolicy -A
 
 
-
 echo ""
 echo "===================================== show connectivity status of each agent ==================================="
 echo ""
@@ -83,8 +80,6 @@ for POD in ${AGENT_PODS} ; do
 done
 
 
-
-
 echo ""
 echo "===================================== show error log of each agent ==================================="
 echo ""
@@ -100,4 +95,32 @@ for POD in ${AGENT_PODS} ; do
 done
 
 
+echo ""
+echo "===================================== cilium-dbg status of each agent ==================================="
+echo ""
+for POD in ${AGENT_PODS} ; do
+    echo "----------------------agent pod ${POD}: cilium-dbg status --verbose ----------------------"
+    kubectl -n ${CILIUM_NS} exec -ti ${POD} -c cilium-agent -- cilium-dbg status --verbose
+    echo
+done
 
+
+echo ""
+echo "===================================== cilium-health status of each agent ==================================="
+echo ""
+for POD in ${AGENT_PODS} ; do
+    echo "----------------------agent pod ${POD}: cilium-health status --verbose ----------------------"
+    kubectl -n ${CILIUM_NS} exec -ti ${POD} -c cilium-agent -- cilium-health status --verbose
+    echo
+done
+
+ 
+echo ""
+echo "===================================== node route of each agent ==================================="
+echo ""
+for POD in ${AGENT_PODS} ; do
+    echo "----------------------agent pod ${POD}: node route ----------------------"
+    kubectl -n ${CILIUM_NS} exec -ti ${POD} -c cilium-agent -- cilium-dbg node list
+    echo
+    kubectl -n ${CILIUM_NS} exec -ti ${POD} -c cilium-agent -- cilium-dbg bpf tunnel list
+done
