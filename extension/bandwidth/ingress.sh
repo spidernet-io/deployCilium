@@ -255,21 +255,21 @@ cleanup_existing_configuration() {
     local route_count=0
     
     # Remove specific /32 routes
-    while sudo ip route del "$TARGET_IP/32" 2>/dev/null; do
+    while  ip route del "$TARGET_IP/32" 2>/dev/null; do
         ((route_count++))
         echo "  Removed route #$route_count: $TARGET_IP/32"
         echo "[DEBUG] Removed /32 route for $TARGET_IP" >&2
     done
     
     # Remove CIDR routes
-    while sudo ip route del "$INGRESS_IP" 2>/dev/null; do
+    while  ip route del "$INGRESS_IP" 2>/dev/null; do
         ((route_count++))
         echo "  Removed route #$route_count: $INGRESS_IP"
         echo "[DEBUG] Removed CIDR route for $INGRESS_IP" >&2
     done
     
     # Remove target IP route via via-ip
-    while sudo ip route del "$TARGET_IP" via "$VIA_IP" dev "$EGRESS_INTERFACE" 2>/dev/null; do
+    while  ip route del "$TARGET_IP" via "$VIA_IP" dev "$EGRESS_INTERFACE" 2>/dev/null; do
         ((route_count++))
         echo "  Removed route #$route_count: $TARGET_IP via $VIA_IP dev $EGRESS_INTERFACE"
         echo "[DEBUG] Removed forwarding route for $TARGET_IP via $VIA_IP" >&2
@@ -288,7 +288,7 @@ cleanup_existing_configuration() {
     local neighbor_count=0
     
     # Remove neighbor entry for via-ip
-    if sudo ip neighbor del "$VIA_IP" dev "$EGRESS_INTERFACE" 2>/dev/null; then
+    if  ip neighbor del "$VIA_IP" dev "$EGRESS_INTERFACE" 2>/dev/null; then
         ((neighbor_count++))
         echo "  Removed neighbor entry: $VIA_IP on $EGRESS_INTERFACE"
         echo "[DEBUG] Removed neighbor entry for $VIA_IP on $EGRESS_INTERFACE" >&2
@@ -304,10 +304,10 @@ cleanup_existing_configuration() {
 
     # Clean up existing TC rules
     echo "Checking existing TC rules..."
-    if sudo tc qdisc show dev "$EGRESS_INTERFACE" | grep -q "htb"; then
+    if  tc qdisc show dev "$EGRESS_INTERFACE" | grep -q "htb"; then
         echo "  Found existing HTB qdisc, removing..."
         echo "[DEBUG] Removing HTB qdisc from $EGRESS_INTERFACE" >&2
-        sudo tc qdisc del dev "$EGRESS_INTERFACE" root 2>/dev/null || true
+         tc qdisc del dev "$EGRESS_INTERFACE" root 2>/dev/null || true
         echo "  TC rules cleanup completed"
         echo "[INFO] HTB qdisc removed from $EGRESS_INTERFACE" >&2
     else
@@ -330,7 +330,7 @@ configure_system_settings() {
     # Requirement 1: Enable IP forwarding
     echo "Step 1: Enabling IP forwarding..."
     echo "[DEBUG] Executing: sysctl -w net.ipv4.ip_forward=1" >&2
-    if sudo sysctl -w net.ipv4.ip_forward=1; then
+    if  sysctl -w net.ipv4.ip_forward=1; then
         echo "[INFO] IP forwarding enabled successfully" >&2
         echo "✓ IP forwarding enabled"
     else
@@ -338,10 +338,62 @@ configure_system_settings() {
         exit 1
     fi
     
+    # New Requirement 1: Ensure ingress-ip is not assigned to ingress-interface
+    echo "Step 1a: Ensuring ingress IP is not assigned to ingress interface..."
+    echo "[DEBUG] Checking if $TARGET_IP is assigned to $INGRESS_INTERFACE" >&2
+    
+    # Check if the IP is assigned to the interface
+    if ip addr show dev "$INGRESS_INTERFACE" | grep -q "inet $TARGET_IP\/"; then
+        echo "[WARNING] IP address $TARGET_IP is assigned to interface $INGRESS_INTERFACE, removing it..." >&2
+        echo "[DEBUG] Executing: sudo ip addr del $TARGET_IP dev $INGRESS_INTERFACE" >&2
+        if sudo ip addr del "$TARGET_IP" dev "$INGRESS_INTERFACE" >&2; then
+            echo "[INFO] Successfully removed $TARGET_IP from $INGRESS_INTERFACE" >&2
+            echo "✓ Removed $TARGET_IP from $INGRESS_INTERFACE"
+        else
+            echo "[ERROR] Failed to remove $TARGET_IP from $INGRESS_INTERFACE" >&2
+            exit 1
+        fi
+    else
+        echo "[INFO] IP address $TARGET_IP is not assigned to $INGRESS_INTERFACE" >&2
+        echo "✓ IP address check passed"
+    fi
+    
+    # New Requirement 2: Set rp_filter=0 for both interfaces
+    echo "Step 1b: Setting rp_filter=0 for ingress and egress interfaces..."
+    
+    # Set rp_filter=0 for ingress interface
+    echo "[DEBUG] Setting rp_filter=0 for ingress interface $INGRESS_INTERFACE" >&2
+    if  sysctl -w "net.ipv4.conf.$INGRESS_INTERFACE.rp_filter=0"; then
+        echo "[INFO] rp_filter set to 0 for $INGRESS_INTERFACE" >&2
+        echo "✓ rp_filter=0 for $INGRESS_INTERFACE"
+    else
+        echo "[ERROR] Failed to set rp_filter=0 for $INGRESS_INTERFACE" >&2
+        exit 1
+    fi
+    
+    # Set rp_filter=0 for egress interface
+    echo "[DEBUG] Setting rp_filter=0 for egress interface $EGRESS_INTERFACE" >&2
+    if  sysctl -w "net.ipv4.conf.$EGRESS_INTERFACE.rp_filter=0"; then
+        echo "[INFO] rp_filter set to 0 for $EGRESS_INTERFACE" >&2
+        echo "✓ rp_filter=0 for $EGRESS_INTERFACE"
+    else
+        echo "[ERROR] Failed to set rp_filter=0 for $EGRESS_INTERFACE" >&2
+        exit 1
+    fi
+    
+    echo "[DEBUG] Setting rp_filter=0 for all interfaces" >&2
+    if  sysctl -w "net.ipv4.conf.all.rp_filter=0"; then
+        echo "[INFO] rp_filter set to 0 for all interfaces" >&2
+        echo "✓ rp_filter=0 for all interfaces"
+    else
+        echo "[ERROR] Failed to set rp_filter=0 for all interfaces" >&2
+        exit 1
+    fi
+  
     # Requirement 2: Enable ARP proxy on ingress interface
     echo "Step 2: Enabling ARP proxy on ingress interface..."
     echo "[DEBUG] Executing: sysctl -w net.ipv4.conf.$INGRESS_INTERFACE.proxy_arp=1" >&2
-    if sudo sysctl -w "net.ipv4.conf.$INGRESS_INTERFACE.proxy_arp=1"; then
+    if  sysctl -w "net.ipv4.conf.$INGRESS_INTERFACE.proxy_arp=1"; then
         echo "[INFO] ARP proxy enabled successfully on interface $INGRESS_INTERFACE" >&2
         echo "✓ ARP proxy enabled on $INGRESS_INTERFACE"
     else
@@ -356,7 +408,7 @@ configure_system_settings() {
 
     # Configure forwarding route
     echo "Adding forwarding route: $TARGET_IP via $VIA_IP dev $EGRESS_INTERFACE onlink"
-    if sudo ip route add "$TARGET_IP" via "$VIA_IP" dev "$EGRESS_INTERFACE" onlink; then
+    if  ip route add "$TARGET_IP" via "$VIA_IP" dev "$EGRESS_INTERFACE" onlink; then
         echo "[INFO] Forwarding route added successfully" >&2
         echo "✓ Route: $TARGET_IP via $VIA_IP dev $EGRESS_INTERFACE"
     else
@@ -365,14 +417,14 @@ configure_system_settings() {
 
     # Configure neighbor table entry
     echo "Adding neighbor table entry: $VIA_IP lladdr $VIA_MAC dev $EGRESS_INTERFACE"
-    if sudo ip neighbor add "$VIA_IP" lladdr "$VIA_MAC" dev "$EGRESS_INTERFACE" nud permanent; then
+    if  ip neighbor add "$VIA_IP" lladdr "$VIA_MAC" dev "$EGRESS_INTERFACE" nud permanent; then
         echo "[INFO] Neighbor table entry added successfully" >&2
         echo "✓ Neighbor: $VIA_IP -> $VIA_MAC on $EGRESS_INTERFACE"
     else
         echo "[WARNING] Neighbor entry may already exist or failed to add" >&2
     fi
     
-    echo "[INFO] System configuration completed for requirements 1, 2, and 3" >&2
+    echo "[INFO] System configuration completed for all requirements" >&2
     echo ""
 }
 
@@ -381,12 +433,12 @@ configure_system_settings() {
 create_basic_tc_structure() {
     echo "1. 创建HTB根队列规程和一级父类..."
     # 使用r2q=100来避免quantum警告（默认是10，对于高带宽会产生警告）
-    sudo tc qdisc add dev "$EGRESS_INTERFACE" root handle 1: htb default 10 r2q 100
-    sudo tc class add dev "$EGRESS_INTERFACE" parent 1: classid 1:1 htb rate "$TOTAL_BANDWIDTH" ceil "$TOTAL_BANDWIDTH"
+     tc qdisc add dev "$EGRESS_INTERFACE" root handle 1: htb default 10 r2q 100
+     tc class add dev "$EGRESS_INTERFACE" parent 1: classid 1:1 htb rate "$TOTAL_BANDWIDTH" ceil "$TOTAL_BANDWIDTH"
 
     echo "2. 创建缺省二级子类..."
     # 缺省类：其他端口共享父类总带宽
-    sudo tc class add dev "$EGRESS_INTERFACE" parent 1:1 classid 1:10 htb rate 1mbit ceil "$TOTAL_BANDWIDTH"
+     tc class add dev "$EGRESS_INTERFACE" parent 1:1 classid 1:10 htb rate 1mbit ceil "$TOTAL_BANDWIDTH"
 }
 
 # --- 解析并创建TC规则函数 ---
@@ -424,7 +476,7 @@ create_tc_rules_from_config() {
             echo "[DEBUG] Creating class 1:$classid_counter with rate=$bandwidth, burst=$burst_size" >&2
             
             # Create class with calculated burst size
-            sudo tc class add dev "$EGRESS_INTERFACE" parent 1:1 classid 1:$classid_counter htb \
+             tc class add dev "$EGRESS_INTERFACE" parent 1:1 classid 1:$classid_counter htb \
                 rate "$bandwidth" ceil "$bandwidth" burst "$burst_size" cburst "$burst_size"
             
             # 为每个端口创建过滤器
@@ -453,13 +505,13 @@ create_port_filters() {
         # Flower filter has better support for protocol-specific matching
         # Try both destination port and source port matching
         echo "[DEBUG] Adding flower filter for destination port $port" >&2
-        sudo tc filter add dev "$EGRESS_INTERFACE" protocol ip parent 1: prio $prio_counter flower \
+         tc filter add dev "$EGRESS_INTERFACE" protocol ip parent 1: prio $prio_counter flower \
             ip_proto tcp dst_port "$port" \
             action flowid 1:$classid
         
         # Also try source port matching as backup
         echo "[DEBUG] Adding flower filter for source port $port" >&2
-        sudo tc filter add dev "$EGRESS_INTERFACE" protocol ip parent 1: prio $((prio_counter + 10)) flower \
+         tc filter add dev "$EGRESS_INTERFACE" protocol ip parent 1: prio $((prio_counter + 10)) flower \
             ip_proto tcp src_port "$port" \
             action flowid 1:$classid
         
@@ -761,6 +813,15 @@ generate_equivalent_command() {
             echo "  Class 1:$class_id: 端口 $ports -> 带宽 $bandwidth"
         fi
     done
+
+    echo "ip rule"
+    ip rule 
+
+    echo "ip route"
+    ip route 
+
+    echo "ip neighbor"
+    ip neighbor
     
     # 输出完整命令
     echo ""

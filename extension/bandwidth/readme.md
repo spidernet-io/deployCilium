@@ -44,10 +44,13 @@ spec:
 EOF
 ```
 
-3. 在入口流量节点 ingressNode 上启动一个 spiderpool 的 macvlan pod，它内部具有一张 macvlan 和 veth 网卡
+3. 在入口流量节点 ingressNode 上启动一个 spiderpool 的 macvlan pod （该 pod yaml 需要设置  privileged=true ），它内部具有一张 macvlan 和 veth 网卡
     在 macvlan 网卡内部 运行如下脚本 ingress.sh 
 
+
+
 ```shell
+# 注意，macvlan pod 中的网卡 不能生效 Loadbalancer ip 地址
 # ingress-ip 是 istio gateway 的 Loadbalancer ip
 # via-ip 是 宿主机的 ip
 # via-mac 是本pod 在宿主机侧的 veth 网卡的 mac
@@ -57,7 +60,7 @@ EOF
  ./ingress.sh  \
  	--ingress-ip "172.16.13.90"  \
  	--ingress-interface "eth0" \
- 	--egress-interface "veth" \
+ 	--egress-interface "veth0" \
  	--via-ip "172.16.13.11" \
  	--via-mac "08:00:27:bb:01:14" \
  	--total-bandwidth "300Mbit" \
@@ -72,6 +75,7 @@ EOF
 
 ## 集群 egress 带宽限制
 
+总体思路：每个租户的所有 pod ，都在 出口网关上 分配一个独立的 出口IP，基于每一个出口 ip 来做流控
 
 1. 针对 cilium 出口网关 节点上，配置如下对象，重启节点的 cilium agent，让其关闭 Bandwidth ，这样才能避免 cilium 设置 tc 规则 
     配置完成后，冲洗 对应的 出口网关节点
@@ -99,10 +103,17 @@ EOF
 
 ```
 
-2. 为不同租户的 pod 创建 出口网关策略，让它们出集群的流量都走出口网关节点的 ，使用 指定的 egressIP 源 ip 
+2. 为不同租户的 pod 创建 出口网关策略
+
+让它们出集群的流量都走出口网关节点的 ，每个租户 独立使用 一个  egressIP 源 ip  ， 且该 源 ip 是 出口网关节点的上默认路由网卡 的 同子网 ip （不能被人占用），注意：根据官方的要求，出口网关节点上，需要手动把每个租户的  出口IP 设置到 默认路由网卡
+     例：ip addr add 172.16.1.49/32 dev eth1
+
+
+为某个租户 的所有 pod 配置策略如下，分配一个 独立的 egressIP 源 ip
 
 ```bash
 TENATN_NAME="default"
+EgressIP="172.16.1.49"
 cat <<EOF | kubectl apply -f -
 apiVersion: cilium.io/v2
 kind: CiliumEgressGatewayPolicy
@@ -122,7 +133,7 @@ spec:
         # 设置出口网关节点的 label
         kubernetes.io/hostname: worker4
     # 该 ip 必须是 出口网关节点的 默认路由网卡 的 同子网 ip （该ip未被使用）
-    egressIP: 172.16.1.49
+    egressIP: ${EgressIP}
 EOF
 
 #查看节点上 agent 的生效情况
@@ -130,13 +141,15 @@ kubectl -n kube-system exec ds/cilium -- cilium-dbg bpf egress list
 
 ```
 
+
+
 3. 在出口网关节点上，运行如下脚本 egress.sh ，实现配置 网卡上的 带宽限制 
 
 
 ```shell
 # egress-interface 是出口网卡，它应该是默认路由的网卡
 # egress-total-bandwidth 控制的是总的出口带宽
-# egress-ip-bandwidth 设置了 每个 ip 的出口带宽，每个ip可以对应到一个或者多个租户来使用，每个ip后边带着针对该 ip 的出口带宽限制
+# egress-ip-bandwidth 设置了 每个租户的 出口 ip 的出口带宽 。 每个ip可以对应到一个或者多个租户来使用，每个ip后边带着针对该 ip 的出口带宽限制
  ./egress.sh \
      --egress-interface eth1 \
      --egress-total-bandwidth "1Gbit" \
