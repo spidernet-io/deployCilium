@@ -23,7 +23,7 @@ spec:
       # 设置为入口流量节点的 label
       kubernetes.io/hostname: "ingressNode"
   defaults:
-    # 如下设置的网卡是除了用于引到流量以外的其他所有主机的物理网卡
+    # 如下设置的网卡,包含了节点上 kubelet 工作的物理网，务必不能包含用于后续 macvlan pod 的 master 接口
     devices: "eth1,eth2,....（不能有 用于引导流量的 macvlan 父网卡）"
 EOF
 ```
