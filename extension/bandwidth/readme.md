@@ -28,7 +28,26 @@ spec:
 EOF
 ```
 
-2. 在 cilium 上设置 Loadbalancer ip 池，但是，不要使用 arp 或者 bgp crd 来发布它 ！
+2. 对选择作为 ingressNode 的节点上，执行以下所有命令，避免后续 引流 pod 的流量 转发到主机后，被主机过滤了
+
+```bash
+
+echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter
+echo 0 > /proc/sys/net/ipv4/conf/default/rp_filter
+for interface in /proc/sys/net/ipv4/conf/*/rp_filter; do
+    echo 0 > "$interface"
+done
+
+# 创建或更新 sysctl 配置
+SYSCTL_FILE="/etc/sysctl.d/99-rp-filter.conf"
+cat > "$SYSCTL_FILE" << 'EOF'
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.default.rp_filter = 0
+EOF
+sysctl -p "$SYSCTL_FILE"
+```
+
+3. 在 cilium 上设置 Loadbalancer ip 池，但是，不要使用 arp 或者 bgp crd 来发布它 ！
 
 ```bash
 # ip 地址池 应该是 入口流量网卡的 子网，其中的ip 没人使用 
@@ -44,7 +63,7 @@ spec:
 EOF
 ```
 
-3. 在入口流量节点 ingressNode 上启动一个 spiderpool 的 macvlan pod （ 纯 macvlan 单网卡，不需要和 cilium 搭配 双 网卡；且 该 pod yaml 需要设置  privileged=true ），并且 该 pod ip 不能是 Loadbalancer ip 池中的 ip
+4. 在入口流量节点 ingressNode 上启动一个 spiderpool 的 macvlan pod （ 纯 macvlan 单网卡，不需要和 cilium 搭配 双 网卡；且 该 pod yaml 需要设置  privileged=true ），并且 该 pod ip 不能是 Loadbalancer ip 池中的 ip
     在 macvlan pod 内部 运行如下脚本 ingress.sh 
 
 
@@ -64,7 +83,6 @@ EOF
  	--total-bandwidth "300Mbit" \
  	--tc-rule "80:10Mbit"  \
  	--tc-rule "443,900:20Mbit"
-
 
 # 查看生效规则
  ./ingress.sh show
