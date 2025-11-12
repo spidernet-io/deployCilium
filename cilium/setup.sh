@@ -101,18 +101,18 @@ echo "ENABLE_INTEGRATE_ISTIO=${ENABLE_INTEGRATE_ISTIO}"
 
 #===================  install CLI 
 
-cp  ${CURRENT_DIR_PATH}/binary/hubble-linux-amd64-${HUBBLE_CLI_VERSION}.tar.gz /tmp/hubble-linux-amd64.tar.gz
+cp  ${CURRENT_DIR_PATH}/binary/hubble-cli-${HUBBLE_CLI_VERSION}-linux-amd64.tar.gz /tmp/hubble-cli-linux-amd64.tar.gz
 ( 
     cd /tmp 
-    tar xzvf hubble-linux-amd64.tar.gz
+    tar xzvf hubble-cli-linux-amd64.tar.gz
     chmod +x hubble
     cp hubble /usr/sbin/
 )
 
-cp ${CURRENT_DIR_PATH}/binary/cilium-linux-amd64-${CILIUM_CLI_VERSION}.tar.gz /tmp/cilium-linux-amd64.tar.gz 
+cp ${CURRENT_DIR_PATH}/binary/cilium-cli-${CILIUM_CLI_VERSION}-linux-amd64.tar.gz /tmp/cilium-cli-linux-amd64.tar.gz 
 ( 
     cd /tmp
-    tar xzvf cilium-linux-amd64.tar.gz
+    tar xzvf cilium-cli-linux-amd64.tar.gz
     chmod +x cilium
     mv cilium /usr/sbin/
 )
@@ -183,7 +183,7 @@ if [ "${ENABLE_INTEGRATE_ISTIO}" == "true" ] ; then
     "
 fi
 
-helm install  cilium ${CHART_PATH} --debug  --atomic --version $CILIUM_VERSION  --timeout 20m \
+helm upgrade --install  cilium ${CHART_PATH} --debug  --atomic --version $CILIUM_VERSION  --timeout 20m \
   --namespace ${NAMESPACE}  \
   -f ${CURRENT_DIR_PATH}/values.yaml \
   ${HELM_OPTIONS}
