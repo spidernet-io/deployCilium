@@ -1,0 +1,63 @@
+# Makefile.defs - Shared configuration for all Makefiles
+
+# ============================================================================
+# Directory Structure
+# ============================================================================
+ROOT_DIR := $(realpath $(dir $(filter %Makefile.defs,$(MAKEFILE_LIST))))
+CILIUM_DIR := $(ROOT_DIR)/cilium
+TEST_DIR := $(ROOT_DIR)/test
+
+# ============================================================================
+# Tool Versions
+# ============================================================================
+KIND_VERSION ?= v0.20.0
+KUBECTL_VERSION ?= v1.32.0
+K8S_VERSION ?= ''
+
+# ============================================================================
+# Single Cluster Configuration
+# ============================================================================
+SINGLE_CLUSTER_NAME := cilium-test
+SINGLE_POD_SUBNET := 10.244.0.0/16
+SINGLE_SERVICE_SUBNET := 10.96.0.0/12
+SINGLE_CLUSTER_ID := 1
+SINGLE_HUBBLE_PORT := 30000
+SINGLE_CLUSTERMESH_PORT := 31000
+
+# ============================================================================
+# Multi-Cluster Configuration
+# ============================================================================
+# Cluster 1
+CLUSTER1_NAME := cluster1
+CLUSTER1_POD_SUBNET := 10.1.0.0/16
+CLUSTER1_SERVICE_SUBNET := 10.11.0.0/16
+CLUSTER1_ID := 1
+CLUSTER1_HUBBLE_PORT := 30000
+CLUSTER1_CLUSTERMESH_PORT := 31000
+
+# Cluster 2
+CLUSTER2_NAME := cluster2
+CLUSTER2_POD_SUBNET := 10.2.0.0/16
+CLUSTER2_SERVICE_SUBNET := 10.12.0.0/16
+CLUSTER2_ID := 2
+CLUSTER2_HUBBLE_PORT := 30001
+CLUSTER2_CLUSTERMESH_PORT := 31001
+
+# ============================================================================
+# Colors for Output
+# ============================================================================
+RED := \x1b[0;31m
+GREEN := \x1b[0;32m
+YELLOW := \x1b[1;33m
+BLUE := \x1b[0;34m
+NC := \x1b[0m
+
+# ============================================================================
+# Export Variables
+# ============================================================================
+export ROOT_DIR
+export CILIUM_DIR
+export TEST_DIR
+export KIND_VERSION
+export KUBECTL_VERSION
+```](cascade:incomplete-link)

@@ -19,7 +19,6 @@ bpf:
   # preallocateMaps: memory usage but can reduce latency
   preallocateMaps: true
   tproxy: true
-  lbBypassFIBLookup: true
 
   # hostLegacyRouting: 要求kernel>=5.10. Configure whether direct routing mode should route traffic via host stack (true) or bypass netfilter in the host namespace 
   hostLegacyRouting: true
@@ -74,15 +73,20 @@ wellKnownIdentities:
 # required
 securityContext:
   privileged: true
+  # cannot set `allowPrivilegeEscalation` to false and `privileged` to true
+  allowPrivilegeEscalation: true
 
-#debug:
-#  enabled: ${ENABLE_DEBUG}
+debug:
+  enabled: false
+  verbose: ""
 
 # mounting the eBPF filesystem and updating the existing Azure CNI plugin to run in ‘transparent’ mode.
 nodeinit:
   enabled: true
   securityContext:
     privileged: true
+    # cannot set `allowPrivilegeEscalation` to false and `privileged` to true
+    allowPrivilegeEscalation: true
 
 # deploy envoy as standalone daemonset, but does not run inside cilium agent pod
 # This means both the Cilium agent and the Envoy proxy not only share the same lifecycle but also the same blast radius in the event of a compromise
@@ -131,9 +135,6 @@ l2announcements:
 k8sClientRateLimit:
   qps: 50
   burst: 60
-
-hostPort:
-  enabled: true
 
 kubeProxyReplacement: true
 
