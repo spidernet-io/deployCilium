@@ -7,4 +7,15 @@ networking:
   serviceSubnet: "__SERVICE_SUBNET__"
 nodes:
 - role: control-plane
+  # Cilium values.yaml pins hubble-relay/ui/frontend, certgen and
+  # clustermesh-apiserver onto control-plane nodes via nodeAffinity.
+  # Remove the default control-plane taint so those pods can schedule
+  # in the CI kind cluster (which only has 1 control-plane + 1 worker).
+  kubeadmConfigPatches:
+  - |-
+    kind: InitConfiguration
+    metadata:
+      name: config
+    nodeRegistration:
+      taints: []
 - role: worker

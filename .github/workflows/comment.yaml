@@ -1,0 +1,95 @@
+name: Comment PR Results
+
+# This workflow runs AFTER "Validate Cilium Installation" completes and posts
+# the test results back to the PR. It uses the `workflow_run` trigger so that
+# it executes in the base-repo context, where secrets are available and
+# GITHUB_TOKEN has write access — even for PRs opened from forks. The test
+# workflow itself stays on `pull_request` (read-only for forks) so fork code
+# is never run with elevated permissions.
+on:
+  workflow_run:
+    workflows: ["Validate Cilium Installation"]
+    types: [completed]
+
+jobs:
+  comment:
+    name: Comment Results
+    runs-on: ubuntu-latest
+    # Only comment on runs that were triggered by a pull request (not a push).
+    if: ${{ github.event.workflow_run.event == 'pull_request' }}
+    permissions:
+      pull-requests: write
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          # Prefer the dedicated PAT (COPILOT_GITHUB_TOKEN) when available;
+          # otherwise the base-repo GITHUB_TOKEN (writable in workflow_run
+          # context) is sufficient. This job never checks out fork code.
+          github-token: ${{ secrets.COPILOT_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const run = context.payload.workflow_run;
+            const { owner, repo } = context.repo;
+
+            // Look up the pull request(s) associated with this workflow run.
+            const runData = await github.rest.actions.getWorkflowRun({
+              owner,
+              repo,
+              run_id: run.id
+            });
+            const prs = runData.data.pull_requests || [];
+            if (prs.length === 0) {
+              core.info('No pull request associated with this workflow run; skipping comment.');
+              return;
+            }
+            const prNumber = prs[0].number;
+
+            // Read the conclusions of the individual jobs in the test run.
+            const jobs = await github.rest.actions.listJobsForWorkflowRun({
+              owner,
+              repo,
+              run_id: run.id
+            });
+            const jobMap = {};
+            for (const job of jobs.data.jobs) {
+              jobMap[job.name] = job.conclusion;
+            }
+
+            const results = {
+              validate: jobMap['Validate Configuration'] || 'skipped',
+              single: jobMap['Single Cluster Test'] || 'skipped',
+              multi: jobMap['Multi-Cluster Test'] || 'skipped'
+            };
+
+            const emoji = (s) => s === 'success' ? '✅' : s === 'failure' ? '❌' : '⚠️';
+            const allPassed = Object.values(results).every(r => r === 'success');
+
+            const output = `## Cilium Test Results
+
+            | Test | Status |
+            |------|--------|
+            | Configuration | ${emoji(results.validate)} ${results.validate} |
+            | Single Cluster | ${emoji(results.single)} ${results.single} |
+            | Multi-Cluster | ${emoji(results.multi)} ${results.multi} |
+
+            ${allPassed ? '🎉 All tests passed!' : '⚠️ Some tests failed.'}
+
+            **Run locally:**
+            \`\`\`bash
+            make validate      # Validate configuration only
+            make test-single   # Single cluster test
+            make test-multi    # Multi-cluster test
+            make test-all      # All tests (validate + single + multi)
+            make clean         # Clean up all clusters
+            \`\`\`
+            `;
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: prNumber,
+              body: output
+            });
+
+            core.info(`Commented on PR #${prNumber}`);

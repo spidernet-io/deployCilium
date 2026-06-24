@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+release_script="${project_root}/cilium/tools/check-cilium-release.sh"
+context_file="${project_root}/cilium/tools/cilium-upgrade-context.md"
+prompt_file="${project_root}/cilium/tools/prompts/cilium-upgrade.md"
+version_file="${project_root}/cilium/version.sh"
+pr_body_file=${CILIUM_UPGRADE_PR_BODY:-"/tmp/cilium-upgrade-pr.md"}
+check_only=false
+
+usage() {
+    cat <<'EOF'
+Usage: cilium/tools/run-cilium-upgrade.sh [--check-only]
+
+The script tries each AI CLI in priority order until one succeeds:
+  1. copilot  (requires COPILOT_GITHUB_TOKEN)
+  2. gemini   (requires GEMINI_API_KEY)
+  3. codex    (requires CODEX_API_KEY or OPENAI_API_KEY)
+
+Environment:
+  COPILOT_GITHUB_TOKEN      Copilot credential (fine-grained PAT with
+                            "Copilot Requests" permission).
+  GEMINI_API_KEY            Gemini API key from Google AI Studio.
+  CODEX_API_KEY             OpenAI API key for `codex exec` (preferred).
+  OPENAI_API_KEY            Fallback credential for codex when CODEX_API_KEY
+                            is unset.
+  AI_MODEL                  Optional model name passed to every CLI attempt.
+  GEMINI_MODEL              Gemini-specific model override (used when
+                            AI_MODEL is unset).
+  GITHUB_TOKEN              Optional GitHub API token for release queries.
+  CILIUM_UPGRADE_PR_BODY    Optional PR body path.
+  CILIUM_UPGRADE_ALLOW_DIRTY
+                            Set to "true" only if existing changes are safe.
+  CILIUM_UPGRADE_SKIP_VALIDATION
+                            Set to "true" to skip make validation locally.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --check-only)
+            check_only=true
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
+required_commands=(curl git jq sed sort)
+if [[ "${check_only}" != "true" ]]; then
+    required_commands+=(make)
+fi
+
+for command in "${required_commands[@]}"; do
+    if ! command -v "${command}" >/dev/null 2>&1; then
+        echo "Missing required command: ${command}" >&2
+        exit 1
+    fi
+done
+
+cd "${project_root}"
+
+case "${pr_body_file}" in
+    "${project_root}"/*)
+        echo "CILIUM_UPGRADE_PR_BODY must point outside the repository." >&2
+        exit 1
+        ;;
+esac
+
+for file in "${release_script}" "${prompt_file}" "${version_file}"; do
+    if [[ ! -f "${file}" ]]; then
+        echo "Missing required updater file: ${file}" >&2
+        exit 1
+    fi
+done
+
+if [[ "${CILIUM_UPGRADE_ALLOW_DIRTY:-false}" != "true" ]] &&
+    [[ -n "$(git status --porcelain)" ]]; then
+    echo "The worktree must be clean before an automated upgrade." >&2
+    echo "Commit or stash existing changes, or explicitly set CILIUM_UPGRADE_ALLOW_DIRTY=true." >&2
+    exit 1
+fi
+
+release_output=$(mktemp)
+ai_output=$(mktemp)
+cleanup() {
+    rm -f "${release_output}" "${ai_output}" "${context_file}"
+}
+trap cleanup EXIT
+
+"${release_script}" | tee "${release_output}"
+
+current_version=$(sed -n 's/^current_version=//p' "${release_output}")
+latest_version=$(sed -n 's/^latest_version=//p' "${release_output}")
+release_url=$(sed -n 's/^release_url=//p' "${release_output}")
+needs_update=$(sed -n 's/^needs_update=//p' "${release_output}")
+
+if [[ "${needs_update}" != "true" ]]; then
+    echo "Cilium ${current_version} is already the latest stable release."
+    if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+        echo "changed=false" >> "${GITHUB_OUTPUT}"
+    fi
+    exit 0
+fi
+
+echo "Cilium upgrade available: ${current_version} -> ${latest_version}"
+echo "Release: ${release_url}"
+
+if [[ "${check_only}" == "true" ]]; then
+    echo "Check-only mode: AI CLIs were not invoked."
+    if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+        {
+            echo "current_version=${current_version}"
+            echo "latest_version=${latest_version}"
+            echo "release_url=${release_url}"
+            echo "changed=false"
+        } >> "${GITHUB_OUTPUT}"
+    fi
+    exit 0
+fi
+
+agent_prompt="Read and follow cilium/tools/prompts/cilium-upgrade.md. Read cilium/tools/cilium-upgrade-context.md for the complete release-note range. Modify this working tree and return only the required Markdown PR body. The complete PR body must be written in Chinese."
+
+# Priority order: copilot -> gemini -> codex.
+agent_order=(copilot gemini codex)
+success_agent=""
+
+# Return the credential for a given agent, or empty if none is configured.
+credential_for() {
+    case "$1" in
+        copilot) printf '%s' "${COPILOT_GITHUB_TOKEN:-}" ;;
+        gemini)  printf '%s' "${GEMINI_API_KEY:-}" ;;
+        codex)   printf '%s' "${CODEX_API_KEY:-${OPENAI_API_KEY:-}}" ;;
+    esac
+}
+
+# Return the model name for a given agent, or empty to use the CLI default.
+model_for() {
+    case "$1" in
+        gemini) printf '%s' "${AI_MODEL:-${GEMINI_MODEL:-}}" ;;
+        *)      printf '%s' "${AI_MODEL:-}" ;;
+    esac
+}
+
+# Reset the working tree to a clean state so a failed attempt does not pollute
+# the next one. Only tracked files within the allowed scope are touched. The
+# generated context file is preserved across retries via -e so the next agent
+# can still read the upstream release notes.
+reset_worktree() {
+    git checkout -- cilium test README.md Makefile Makefile.defs 2>/dev/null || true
+    git clean -fd -e cilium/tools/cilium-upgrade-context.md \
+        -- cilium test README.md Makefile Makefile.defs 2>/dev/null || true
+    rm -f "${pr_body_file}"
+    rm -rf .gemini
+}
+
+# Run a single AI CLI. Returns 0 on success, non-zero on failure.
+# The PR body is written to ${pr_body_file}.
+run_single_agent() {
+    local agent="$1"
+    local credential
+    local model
+    local -a model_args=()
+
+    credential=$(credential_for "${agent}")
+    [[ -n "${credential}" ]] || return 1
+
+    model=$(model_for "${agent}")
+    [[ -z "${model}" ]] || model_args=(--model "${model}")
+
+    case "${agent}" in
+        copilot)
+            COPILOT_GITHUB_TOKEN="${credential}" \
+            copilot \
+                --prompt "${agent_prompt}" \
+                --allow-all \
+                --no-ask-user \
+                --no-auto-update \
+                --silent \
+                --output-format text \
+                "${model_args[@]}" \
+                > "${pr_body_file}" 2> "${ai_output}"
+            ;;
+        gemini)
+            GEMINI_API_KEY="${credential}" \
+            gemini \
+                --approval-mode yolo \
+                --skip-trust \
+                "${model_args[@]}" \
+                --output-format json \
+                --prompt "${agent_prompt}" \
+                > "${ai_output}" 2>&1
+            if jq -e '.error == null and (.response | type == "string")' "${ai_output}" >/dev/null 2>&1; then
+                jq -r '.response' "${ai_output}" > "${pr_body_file}"
+            else
+                return 1
+            fi
+            rm -rf .gemini
+            ;;
+        codex)
+            CODEX_API_KEY="${credential}" \
+            codex exec \
+                --dangerously-bypass-approvals-and-sandbox \
+                --ephemeral \
+                --cd "${project_root}" \
+                "${model_args[@]}" \
+                --output-last-message "${pr_body_file}" \
+                "${agent_prompt}" \
+                > "${ai_output}" 2>&1
+            ;;
+    esac
+}
+
+# Validate that the PR body contains every required section and that the
+# working tree reflects a successful upgrade. Returns 0 on success.
+validate_upgrade() {
+    local agent="$1"
+
+    for heading in \
+        "### 摘要" \
+        "### 已审阅的发布说明" \
+        "### 配置和行为变更" \
+        "### 验证" \
+        "### 风险和审查重点"
+    do
+        grep -Fq "${heading}" "${pr_body_file}" || {
+            echo "${agent} response is missing required PR section: ${heading}" >&2
+            return 1
+        }
+    done
+
+    local actual_version
+    actual_version=$(
+        sed -n 's/^[[:space:]]*CILIUM_VERSION=${CILIUM_VERSION:-"\([^"]*\)"}.*/\1/p' \
+            cilium/version.sh
+    )
+    if [[ "${actual_version}" != "${latest_version}" ]]; then
+        echo "${agent} did not pin Cilium ${latest_version}; found ${actual_version}." >&2
+        return 1
+    fi
+
+    local invalid_paths
+    invalid_paths=$(
+        git status --short |
+            sed 's/^...//' |
+            grep -Ev '^(cilium/|test/|README\.md$|Makefile$|Makefile\.defs$)' || true
+    )
+    if [[ -n "${invalid_paths}" ]]; then
+        echo "${agent} changed paths outside the allowed scope:" >&2
+        echo "${invalid_paths}" >&2
+        return 1
+    fi
+
+    if git diff --quiet && git diff --cached --quiet; then
+        echo "${agent} produced no upgrade changes." >&2
+        return 1
+    fi
+
+    return 0
+}
+
+for agent in "${agent_order[@]}"; do
+    if [[ -z "$(credential_for "${agent}")" ]]; then
+        echo "Skipping ${agent}: no credential configured."
+        continue
+    fi
+    if ! command -v "${agent}" >/dev/null 2>&1; then
+        echo "Skipping ${agent}: CLI not installed."
+        continue
+    fi
+
+    echo "Attempting Cilium upgrade with ${agent}..."
+    if run_single_agent "${agent}" && validate_upgrade "${agent}"; then
+        success_agent="${agent}"
+        echo "${agent} completed the upgrade successfully."
+        break
+    fi
+
+    echo "${agent} failed; resetting worktree before next attempt." >&2
+    reset_worktree
+done
+
+rm -f "${context_file}"
+
+if [[ -z "${success_agent}" ]]; then
+    echo "All AI agents (copilot, gemini, codex) failed or were unavailable." >&2
+    exit 1
+fi
+
+if [[ "${CILIUM_UPGRADE_SKIP_VALIDATION:-false}" != "true" ]]; then
+    make prepare
+    make ci-validate
+    cat >> "${pr_body_file}" <<'EOF'
+
+#### 自动化验证
+
+- `make prepare`：通过
+- `make ci-validate`：通过
+- 完整 kind e2e：推迟到 PR 工作流执行
+EOF
+fi
+
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    {
+        echo "current_version=${current_version}"
+        echo "latest_version=${latest_version}"
+        echo "release_url=${release_url}"
+        echo "pr_body_path=${pr_body_file}"
+        echo "changed=true"
+    } >> "${GITHUB_OUTPUT}"
+fi
+
+echo
+echo "Upgrade changes are ready in the working tree."
+echo "PR body: ${pr_body_file}"
+git status --short
