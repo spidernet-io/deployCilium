@@ -102,19 +102,19 @@ echo "ENABLE_INTEGRATE_ISTIO=${ENABLE_INTEGRATE_ISTIO}"
 #===================  install CLI 
 
 cp  ${CURRENT_DIR_PATH}/binary/hubble-cli-${HUBBLE_CLI_VERSION}-linux-amd64.tar.gz /tmp/hubble-cli-linux-amd64.tar.gz
-( 
-    cd /tmp 
+(
+    cd /tmp
     tar xzvf hubble-cli-linux-amd64.tar.gz
     chmod +x hubble
-    cp hubble /usr/sbin/
+    sudo cp hubble /usr/sbin/
 )
 
-cp ${CURRENT_DIR_PATH}/binary/cilium-cli-${CILIUM_CLI_VERSION}-linux-amd64.tar.gz /tmp/cilium-cli-linux-amd64.tar.gz 
-( 
+cp ${CURRENT_DIR_PATH}/binary/cilium-cli-${CILIUM_CLI_VERSION}-linux-amd64.tar.gz /tmp/cilium-cli-linux-amd64.tar.gz
+(
     cd /tmp
     tar xzvf cilium-cli-linux-amd64.tar.gz
     chmod +x cilium
-    mv cilium /usr/sbin/
+    sudo mv cilium /usr/sbin/
 )
 
 
@@ -183,7 +183,15 @@ if [ "${ENABLE_INTEGRATE_ISTIO}" == "true" ] ; then
     "
 fi
 
-helm upgrade --install  cilium ${CHART_PATH} --debug  --atomic --version $CILIUM_VERSION  --timeout 20m \
+# --atomic auto-rolls back (deletes) the release on failure, which wipes the
+# pods we need to inspect. In CI we set DISABLE_HELM_ATOMIC=true to keep them.
+HELM_ATOMIC=""
+if [ "${DISABLE_HELM_ATOMIC:-"false"}" != "true" ]; then
+    HELM_ATOMIC="--atomic"
+fi
+
+helm upgrade --install  cilium ${CHART_PATH} --debug ${HELM_ATOMIC} --version $CILIUM_VERSION  --timeout 10m \
   --namespace ${NAMESPACE}  \
   -f ${CURRENT_DIR_PATH}/values.yaml \
-  ${HELM_OPTIONS}
+  ${HELM_OPTIONS} \
+  ${EXTRA_HELM_OPTIONS:-}

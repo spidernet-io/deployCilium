@@ -27,6 +27,10 @@ K8S_API_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type
 
 # Install Cilium
 cd "${CILIUM_DIR}"
+chmod +x ./setup.sh
+# kind nodes run inside Docker containers and lack /proc/sys/net/core/default_qdisc,
+# so bandwidthManager must be disabled to avoid log errors that fail the
+# cilium connectivity test's check-log-errors test.
 POD_v4CIDR="${POD_CIDR}" \
 POD_v4Block="24" \
 ENABLE_IPV6="false" \
@@ -39,6 +43,8 @@ CLUSTERMESH_APISERVER_NODEPORT="${CLUSTERMESH_PORT}" \
 ENABLE_gatewayAPI="false" \
 ENABLE_INTEGRATE_ISTIO="false" \
 DAOCLOUD_REPO="" \
+DISABLE_HELM_ATOMIC="${DISABLE_HELM_ATOMIC:-"false"}" \
+EXTRA_HELM_OPTIONS="--set bandwidthManager.enabled=false" \
 ./setup.sh
 
 echo "✓ Cilium installed on ${CLUSTER_NAME}"

@@ -7,16 +7,16 @@ include Makefile.defs
 .DEFAULT_GOAL := help
 
 help: ## Show this help message
-	@echo -e ''
-	@echo -e '$(BLUE)Cilium Deployment Project$(NC)'
-	@echo -e ''
-	@echo -e 'Usage:'
-	@echo -e '  make <target>'
-	@echo -e ''
-	@echo -e 'Main Targets:'
+	@printf '%b\n' ''
+	@printf '%b\n' '$(BLUE)Cilium Deployment Project$(NC)'
+	@printf '%b\n' ''
+	@printf '%b\n' 'Usage:'
+	@printf '%b\n' '  make <target>'
+	@printf '%b\n' ''
+	@printf '%b\n' 'Main Targets:'
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  $(BLUE)%-20s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@echo -e ''
-	@echo -e 'Test Targets (from test/Makefile):'
+	@printf '%b\n' ''
+	@printf '%b\n' 'Test Targets (from test/Makefile):'
 	@$(MAKE) -C $(TEST_DIR) help | grep -A 100 "Targets:" | tail -n +2
 
 # ============================================================================
@@ -82,4 +82,4 @@ clean: ## Clean up all clusters
 # ============================================================================
 
 ci-validate: check-tools test-syntax validate ## Run validation for CI
-	@echo -e "$(GREEN)✓ CI validation completed$(NC)"
+	@printf '%b\n' "$(GREEN)✓ CI validation completed$(NC)"
