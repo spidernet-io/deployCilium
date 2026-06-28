@@ -3,16 +3,16 @@
 set -euo pipefail
 
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-version_file="${project_root}/cilium/version.sh"
 context_file="${project_root}/cilium/tools/cilium-upgrade-context.md"
 api_url="https://api.github.com/repos/cilium/cilium/releases?per_page=100"
 
-current_version=$(
-    sed -n 's/^[[:space:]]*CILIUM_VERSION=${CILIUM_VERSION:-"\([^"]*\)"}.*/\1/p' "${version_file}"
-)
+# The current Cilium version is provided by the caller (the workflow sources
+# cilium/version.sh and exports CURRENT_CILIUM_VERSION). This keeps the
+# script a pure function of its inputs and avoids re-reading version.sh.
+current_version="${CURRENT_CILIUM_VERSION:-}"
 
 if [[ ! "${current_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "Unable to read a stable Cilium version from ${version_file}" >&2
+    echo "CURRENT_CILIUM_VERSION must be set to a stable x.y.z version" >&2
     exit 1
 fi
 
@@ -186,15 +186,8 @@ fi
     done
 } > "${context_file}"
 
-if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-    {
-        echo "current_version=${current_version}"
-        echo "latest_version=${latest_version}"
-        echo "latest_tag=${latest_tag}"
-        echo "release_url=${release_url}"
-        echo "needs_update=${needs_update}"
-    } >> "${GITHUB_OUTPUT}"
-else
-    printf 'current_version=%s\nlatest_version=%s\nrelease_url=%s\nneeds_update=%s\n' \
-        "${current_version}" "${latest_version}" "${release_url}" "${needs_update}"
-fi
+# Always print results to stdout so the caller (run-cilium-upgrade.sh or a
+# workflow step) can parse them with sed/jq. Never write to GITHUB_OUTPUT
+# here — the caller owns that decision.
+printf 'current_version=%s\nlatest_version=%s\nlatest_tag=%s\nrelease_url=%s\nneeds_update=%s\n' \
+    "${current_version}" "${latest_version}" "${latest_tag}" "${release_url}" "${needs_update}"

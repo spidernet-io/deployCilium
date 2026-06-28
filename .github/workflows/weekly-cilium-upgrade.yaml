@@ -25,106 +25,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect latest release and check for existing upgrade PR
-        id: precheck
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          CILIUM_UPDATE_TOKEN: ${{ secrets.CILIUM_UPDATE_TOKEN }}
-          CILIUM_MIN_STABLE_PATCH: ${{ vars.CILIUM_MIN_STABLE_PATCH }}
+      - name: Read current Cilium version
+        id: current
         run: |
-          # Run the release checker with GITHUB_OUTPUT unset so it prints
-          # key=value lines to stdout, which we parse in this same step.
-          release_info=$(env -u GITHUB_OUTPUT cilium/tools/check-cilium-release.sh)
-          echo "${release_info}"
-
-          latest_version=$(sed -n 's/^latest_version=//p' <<< "${release_info}")
-          needs_update=$(sed -n 's/^needs_update=//p' <<< "${release_info}")
-          current_version=$(sed -n 's/^current_version=//p' <<< "${release_info}")
-
-          # Remove the generated context file so the worktree stays clean for
-          # the upgrade script (which regenerates it internally).
-          rm -f cilium/tools/cilium-upgrade-context.md
-
-          # Persist for use by downstream steps.
-          {
-            echo "current_version=${current_version}"
-            echo "latest_version=${latest_version}"
-            echo "needs_update=${needs_update}"
-          } >> "$GITHUB_OUTPUT"
-
-          if [[ "${needs_update}" != "true" ]]; then
-            echo "Cilium is already at the latest stable release (${latest_version})."
-            echo "skipped=true" >> "$GITHUB_OUTPUT"
-            echo "skip_reason=up_to_date" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # List ALL open PRs from the automation branch and extract the
-          # version from each PR title. The title format is:
-          #   "chore: 将 Cilium 升级至 <version>"
-          # We use a regex to pull out the x.y.z version string.
-          search_token="${CILIUM_UPDATE_TOKEN:-${GITHUB_TOKEN}}"
-          pr_json=""
-          if [[ -n "${search_token}" ]]; then
-            pr_json=$(GH_TOKEN="${search_token}" gh pr list \
-              --state open \
-              --head automation/cilium-latest \
-              --json number,title \
-              2>/dev/null || true)
-          fi
-
-          # Find a PR whose title version matches the target version.
-          same_pr=""
-          # Find PRs whose title version is lower than the target version.
-          lower_prs=""
-          if [[ -n "${pr_json}" && "${pr_json}" != "[]" ]]; then
-            # Extract "number|title" pairs, then parse version from title.
-            while IFS='|' read -r pr_num pr_title; do
-              [[ -n "${pr_num}" ]] || continue
-              pr_version=$(printf '%s' "${pr_title}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-              if [[ -z "${pr_version}" ]]; then
-                continue
-              fi
-              if [[ "${pr_version}" == "${latest_version}" ]]; then
-                same_pr="${pr_num}"
-              else
-                # Is the PR's version lower than our target?
-                newest=$(printf '%s\n%s\n' "${pr_version}" "${latest_version}" | sort -V | tail -n 1)
-                if [[ "${newest}" == "${latest_version}" ]]; then
-                  lower_prs+="${pr_num} "
-                fi
-              fi
-            done < <(printf '%s' "${pr_json}" | jq -r '.[] | "\(.number)|\(.title)"')
-          fi
-
-          # Case 1: existing PR already targets the same version -> skip.
-          if [[ -n "${same_pr}" ]]; then
-            echo "Found existing open PR #${same_pr} already targeting Cilium ${latest_version}."
-            echo "Skipping this run to avoid duplicate work."
-            echo "skipped=true" >> "$GITHUB_OUTPUT"
-            echo "skip_reason=existing_pr" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Case 2: existing PR(s) target a lower version -> close them with
-          # a comment, then proceed to create a new PR for the higher version.
-          if [[ -n "${lower_prs}" ]]; then
-            echo "Found stale upgrade PR(s) targeting a lower version: ${lower_prs}"
-            for pr_num in ${lower_prs}; do
-              comment_body="自动关闭：检测到更高版本的 Cilium \`v${latest_version}\` 已发布。本次运行将创建针对 \`v${latest_version}\` 的新升级 PR 来替代此 PR。"
-              GH_TOKEN="${search_token}" gh pr close "${pr_num}" \
-                --comment "${comment_body}" \
-                --delete-branch \
-                2>/dev/null || true
-              echo "Closed stale PR #${pr_num}."
-            done
-          fi
-
-          echo "No existing PR targets Cilium ${latest_version}; proceeding with upgrade."
-          echo "skipped=false" >> "$GITHUB_OUTPUT"
+          source cilium/version.sh
+          echo "version=${CILIUM_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Install AI CLIs and validation tools
-        if: steps.precheck.outputs.skipped != 'true'
         run: |
           npm install --global \
             @github/copilot@latest \
@@ -132,10 +39,10 @@ jobs:
             @openai/codex@latest
           make install-tools
 
-      - name: Run local-compatible upgrade script
-        if: steps.precheck.outputs.skipped != 'true'
+      - name: Run upgrade script
         id: upgrade
         env:
+          CURRENT_CILIUM_VERSION: ${{ steps.current.outputs.version }}
           AI_MODEL: ${{ vars.AI_MODEL }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
@@ -148,7 +55,7 @@ jobs:
           cilium/tools/run-cilium-upgrade.sh
 
       - name: Verify PR token
-        if: steps.precheck.outputs.skipped != 'true' && steps.upgrade.outputs.changed == 'true'
+        if: steps.upgrade.outputs.changed == 'true'
         env:
           CILIUM_UPDATE_TOKEN: ${{ secrets.CILIUM_UPDATE_TOKEN }}
         run: |
@@ -158,7 +65,7 @@ jobs:
           }
 
       - name: Create or update upgrade PR
-        if: steps.precheck.outputs.skipped != 'true' && steps.upgrade.outputs.changed == 'true'
+        if: steps.upgrade.outputs.changed == 'true'
         id: cpr
         uses: peter-evans/create-pull-request@v8
         with:
@@ -166,8 +73,8 @@ jobs:
           branch: automation/cilium-latest
           delete-branch: true
           commit-message: |
-            chore: 将 Cilium 升级至 ${{ steps.precheck.outputs.latest_version }}
-          title: 'chore: 将 Cilium 升级至 ${{ steps.precheck.outputs.latest_version }}'
+            chore: 将 Cilium 升级至 ${{ steps.upgrade.outputs.latest_version }}
+          title: 'chore: 将 Cilium 升级至 ${{ steps.upgrade.outputs.latest_version }}'
           body-path: ${{ steps.upgrade.outputs.pr_body_path }}
           add-paths: |
             cilium/**
