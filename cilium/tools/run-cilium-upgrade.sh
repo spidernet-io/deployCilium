@@ -45,6 +45,8 @@ Environment:
                             deepseek/deepseek-v4-flash.
   AI_MODEL                  Optional fallback model name when an agent-specific
                             model variable is unset.
+  AI_AGENT_TIMEOUT          Maximum runtime for each AI CLI attempt. Defaults
+                            to 15m. Uses GNU timeout duration syntax.
   GITHUB_TOKEN              Optional GitHub API token for release queries.
   CILIUM_UPGRADE_PR_BODY    Optional PR body path.
   CILIUM_UPGRADE_ALLOW_DIRTY
@@ -78,7 +80,7 @@ done
 
 required_commands=(curl git jq sed sort)
 if [[ "${check_only}" != "true" ]]; then
-    required_commands+=(make)
+    required_commands+=(make timeout)
 fi
 
 for command in "${required_commands[@]}"; do
@@ -160,6 +162,7 @@ agent_prompt="Read and follow ${prompt_file}. Read ${context_file} for the compl
 # Priority order: copilot -> deepseek.
 agent_order=(copilot deepseek)
 success_agent=""
+agent_timeout=${AI_AGENT_TIMEOUT:-15m}
 
 # Return the credential for a given agent, or empty if none is configured.
 credential_for() {
@@ -205,6 +208,7 @@ run_single_agent() {
     case "${agent}" in
         copilot)
             COPILOT_GITHUB_TOKEN="${credential}" \
+            timeout --foreground "${agent_timeout}" \
             copilot \
                 --prompt "${agent_prompt}" \
                 --allow-all \
@@ -217,6 +221,7 @@ run_single_agent() {
             ;;
         deepseek)
             DEEPSEEK_API_KEY="${credential}" \
+            timeout --foreground "${agent_timeout}" \
             opencode run \
                 --dir "${project_root}" \
                 --dangerously-skip-permissions \
@@ -324,6 +329,7 @@ for agent in "${agent_order[@]}"; do
     esac
 
     echo "Attempting Cilium upgrade with ${agent}..."
+    echo "${agent} attempt timeout: ${agent_timeout}"
     if run_single_agent "${agent}" && validate_upgrade "${agent}"; then
         success_agent="${agent}"
         echo "${agent} completed the upgrade successfully."

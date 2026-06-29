@@ -298,8 +298,8 @@ jobs:
           branch: automation/cilium-v${{ matrix.target_minor }}-latest
           delete-branch: true
           commit-message: |
-            chore: 将 Cilium ${{ matrix.target_minor }} 升级至 ${{ steps.upgrade.outputs.latest_version }}
-          title: 'chore: 将 Cilium ${{ matrix.target_minor }} 升级至 ${{ steps.upgrade.outputs.latest_version }}'
+            [AutoUpdate v${{ matrix.target_minor }}] Cilium version v${{ steps.upgrade.outputs.current_version }} -> v${{ steps.upgrade.outputs.latest_version }}
+          title: '[AutoUpdate v${{ matrix.target_minor }}] Cilium version v${{ steps.upgrade.outputs.current_version }} -> v${{ steps.upgrade.outputs.latest_version }}'
           body-path: ${{ steps.upgrade.outputs.pr_body_path }}
           add-paths: |
             cilium/**
