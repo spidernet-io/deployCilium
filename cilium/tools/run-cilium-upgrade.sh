@@ -2,10 +2,12 @@
 
 set -euo pipefail
 
-project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-release_script="${project_root}/cilium/tools/check-cilium-release.sh"
+script_project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+project_root=$(cd "${CILIUM_PROJECT_ROOT:-${script_project_root}}" && pwd)
+updater_root=$(cd "${CILIUM_UPDATER_ROOT:-${script_project_root}}" && pwd)
+release_script="${updater_root}/cilium/tools/check-cilium-release.sh"
 context_file="${project_root}/cilium/tools/cilium-upgrade-context.md"
-prompt_file="${project_root}/cilium/tools/prompts/cilium-upgrade.md"
+prompt_file="${updater_root}/cilium/tools/prompts/cilium-upgrade.md"
 version_file="${project_root}/cilium/version.sh"
 pr_body_file=${CILIUM_UPGRADE_PR_BODY:-"/tmp/cilium-upgrade-pr.md"}
 check_only=false
@@ -33,6 +35,9 @@ Environment:
   CURRENT_CILIUM_VERSION   Current pinned Cilium version (x.y.z). When set,
                            it is forwarded to check-cilium-release.sh. When
                            unset, the script reads cilium/version.sh itself.
+  CILIUM_TARGET_MINOR       Target Cilium minor (x.y). Defaults to the current
+                            version's minor. Maintenance branches should set
+                            this from their branch name, e.g. cilium/v1.18.
   COPILOT_GITHUB_TOKEN      Copilot credential (fine-grained PAT with
                             "Copilot Requests" permission).
   GEMINI_API_KEY            Gemini API key from Google AI Studio.
@@ -48,6 +53,10 @@ Environment:
                             Set to "true" only if existing changes are safe.
   CILIUM_UPGRADE_SKIP_VALIDATION
                             Set to "true" to skip make validation locally.
+  CILIUM_PROJECT_ROOT        Repository worktree to modify. Defaults to the
+                            repository containing this script.
+  CILIUM_UPDATER_ROOT        Repository containing updater scripts/prompts.
+                            Defaults to the repository containing this script.
 EOF
 }
 
@@ -114,19 +123,20 @@ trap cleanup EXIT
 "${release_script}" | tee "${release_output}"
 
 current_version=$(sed -n 's/^current_version=//p' "${release_output}")
+target_minor=$(sed -n 's/^target_minor=//p' "${release_output}")
 latest_version=$(sed -n 's/^latest_version=//p' "${release_output}")
 release_url=$(sed -n 's/^release_url=//p' "${release_output}")
 needs_update=$(sed -n 's/^needs_update=//p' "${release_output}")
 
 if [[ "${needs_update}" != "true" ]]; then
-    echo "Cilium ${current_version} is already the latest stable release."
+    echo "Cilium ${current_version} is already the latest stable release for ${target_minor}."
     if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
         echo "changed=false" >> "${GITHUB_OUTPUT}"
     fi
     exit 0
 fi
 
-echo "Cilium upgrade available: ${current_version} -> ${latest_version}"
+echo "Cilium ${target_minor} upgrade available: ${current_version} -> ${latest_version}"
 echo "Release: ${release_url}"
 
 if [[ "${check_only}" == "true" ]]; then
@@ -142,7 +152,7 @@ if [[ "${check_only}" == "true" ]]; then
     exit 0
 fi
 
-agent_prompt="Read and follow cilium/tools/prompts/cilium-upgrade.md. Read cilium/tools/cilium-upgrade-context.md for the complete release-note range. Modify this working tree and return only the required Markdown PR body. The complete PR body must be written in Chinese."
+agent_prompt="Read and follow ${prompt_file}. Read ${context_file} for the complete release-note range. Upgrade only the target Cilium minor recorded in that context; do not select a different Cilium minor. Modify this working tree and return only the required Markdown PR body. The complete PR body must be written in Chinese."
 
 # Priority order: copilot -> gemini -> codex.
 agent_order=(copilot gemini codex)
@@ -326,6 +336,7 @@ fi
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     {
         echo "current_version=${current_version}"
+        echo "target_minor=${target_minor}"
         echo "latest_version=${latest_version}"
         echo "release_url=${release_url}"
         echo "pr_body_path=${pr_body_file}"
