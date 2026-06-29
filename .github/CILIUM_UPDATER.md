@@ -1,147 +1,129 @@
-# Weekly Cilium updater
+# 每周 Cilium 更新器
 
-The `Weekly Cilium Upgrade` workflow runs every Monday at 02:23 UTC and can also be
-started manually via `workflow_dispatch`. It compares `cilium/version.sh` with Cilium's latest stable
-GitHub release. When an upgrade is available, the configured AI CLI reads the
-upstream release notes and repository scripts, updates the project, validates
-the result, and creates or updates `automation/cilium-latest`.
+`Weekly Cilium Upgrade` workflow 每周一 02:23 UTC 从默认分支运行，也可以通过
+`workflow_dispatch` 手动启动。
 
-## Upgrade strategy
+默认分支是更新器控制面。它会发现 Cilium 维护分支，在需要时为上游新发布的
+minor 创建分支，然后检查每个维护分支是否存在 patch 更新。带版本的 Cilium
+内容，例如 charts、binaries、`cilium/version.sh`、values 和部署脚本，都维护在
+`cilium/vX.Y` 分支上，而不是默认分支上。
 
-The updater uses a **prefer same-minor patch, stable cross-minor jump**
-strategy when selecting the target version:
+## 分支模型
 
-1. **Same-minor patches**: if there are higher patch releases within the
-   current minor series (e.g. `1.18.6` → `1.18.9` when
-   `1.18.7`/`1.18.8`/`1.18.9` exist), the highest same-minor patch is
-   chosen. Patch releases are bugfix-only and always safe, regardless of
-   patch number.
-2. **Cross-minor jump**: if no same-minor patch exists, the updater looks
-   at every newer minor series in ascending order. For each, it checks
-   whether the highest available patch is >= `CILIUM_MIN_STABLE_PATCH`
-   (default `2`). The first minor series that qualifies is selected, and
-   its highest qualifying patch is chosen. Minors that only have early
-   patches (`.0`, `.1`) are **skipped entirely** as they are considered
-   unstable.
-3. If no newer minor has a sufficiently stable patch, the updater does
-   not upgrade and waits for a stable release.
+- `main`：更新器 workflow、脚本和文档。
+- `cilium/v1.18`：最新支持的 `1.18.z` 部署内容。
+- `cilium/v1.19`：最新支持的 `1.19.z` 部署内容。
 
-The minimum stable patch threshold can be configured via the repository
-variable `CILIUM_MIN_STABLE_PATCH` (default: `2`). For example, setting it
-to `3` requires at least `x.y.3` before jumping to a new minor series.
+每个 `cilium/vX.Y` 分支只负责一个 Cilium minor 系列。该分支上的自动更新只会
+选择匹配 `X.Y.z` 的版本。
 
-Example scenarios (current version `1.18.6`, threshold `2`):
+## 发现和新 minor 分支
 
-| Available releases | Target | Reason |
-|---|---|---|
-| `1.18.7`, `1.18.8`, `1.19.0` | `1.18.8` | Same-minor patch preferred |
-| `1.19.0`, `1.19.1`, `1.19.2` | `1.19.2` | Next minor has `.2` (stable) |
-| `1.19.0`, `1.19.1`, `1.20.0`, `1.20.1`, `1.20.2` | `1.20.2` | `1.19` only has `.0/.1` (unstable), skip to `1.20.2` |
-| `1.19.0`, `1.19.1` | _(no upgrade)_ | No minor has a stable-enough patch |
+每次运行开始时，workflow 会：
 
-## Duplicate PR handling
+1. 从 GitHub 获取稳定的 Cilium 版本。
+2. 构建稳定上游 minor 列表。
+3. 列出仓库中匹配 `cilium/v*` 的现有分支。
+4. 按版本顺序，从当前最高的 `cilium/vX.Y` 分支创建缺失的更新 minor 分支。
 
-Before invoking any AI CLI, the workflow checks for existing open PRs on the
-`automation/cilium-latest` branch:
+这是“以前一个 minor 作为来源”的策略：新的 Cilium minor 分支从最新维护的 minor
+分支开始，然后由常规升级任务为新分支提出第一个升级 PR。
 
-- If an open PR already targets the **same** version, the run is skipped to
-  avoid duplicate work.
-- If an open PR targets a **lower** version, it is closed (with an explanatory
-  comment and branch deletion) and the run proceeds to create a new PR for the
-  higher version.
+例如，如果仓库已有 `cilium/v1.18`，且上游稳定版本包含 `1.19.0` 和 `1.20.0`，
+workflow 会从 `cilium/v1.18` 创建 `cilium/v1.19`，然后从 `cilium/v1.19` 创建
+`cilium/v1.20`。
 
-## Required repository secrets
+如果仓库还没有任何 `cilium/v*` 分支，workflow 会从默认分支启动引导。默认分支
+停止承载带版本的 Cilium 内容后，请在仓库中至少保留一个 `cilium/vX.Y` 种子分支。
 
-The workflow tries each AI CLI in priority order until one succeeds:
-**copilot → gemini → codex**. An agent is only attempted when its credential
-secret is configured, so you can enable as many or as few fallbacks as you
-like. At least one of the following must be set:
+## 升级策略
 
-- `COPILOT_GITHUB_TOKEN`: fine-grained PAT with the "Copilot Requests"
-  permission, belonging to an account with GitHub Copilot access.
-- `GEMINI_API_KEY`: Gemini API key from Google AI Studio.
-- `CODEX_API_KEY`: OpenAI API key consumed by `codex exec`. `OPENAI_API_KEY`
-  is used as a fallback when `CODEX_API_KEY` is unset.
+对于发现的每个 `cilium/vX.Y` 分支，workflow 会：
 
-A separate secret is always required for PR creation:
+1. 检出该分支。
+2. 从 `cilium/version.sh` 读取当前 `CILIUM_VERSION`。
+3. 设置 `CILIUM_TARGET_MINOR=X.Y`。
+4. 选择匹配 `X.Y.z` 的最新稳定上游版本。
+5. 运行配置好的 AI CLI 来更新仓库内容。
+6. 创建或更新以同一维护分支为目标的 pull request。
 
-- `CILIUM_UPDATE_TOKEN`: fine-grained PAT or GitHub App token with repository
-  `Contents: Read and write` and `Pull requests: Read and write` permissions.
+示例：
 
-The workflow's default `GITHUB_TOKEN` is never used as the Copilot credential
-or as the PR-creation token. Pull requests created with the default token do
-not emit a new `pull_request` event, so `.github/workflows/pr.yaml` would not
-start its e2e jobs. The dedicated token makes PR creation behave like a normal
-user or app operation and automatically triggers those tests.
+| 分支 | 当前版本 | 上游版本 | 目标版本 |
+|---|---:|---|---:|
+| `cilium/v1.18` | `1.18.3` | `1.18.4`, `1.19.0` | `1.18.4` |
+| `cilium/v1.19` | `1.19.0` | `1.19.1`, `1.20.0` | `1.19.1` |
+| `cilium/v1.20` | 分支创建后的 `1.19.4` | `1.20.0` | `1.20.0` |
 
-All three CLIs authenticate via environment variables, so no browser-based
-OAuth flow is needed in CI:
+现有维护分支不会发生跨 minor 升级。分支从一个 minor 移动到另一个 minor 的唯一
+场景，是新创建的 `cilium/vX.Y` 分支上的第一个升级 PR，因为该分支是以前一个
+minor 为起点复制出来的。
 
-| CLI      | Environment variable(s)                                  |
-|----------|----------------------------------------------------------|
-| copilot  | `COPILOT_GITHUB_TOKEN` (highest precedence), `GH_TOKEN`, `GITHUB_TOKEN` |
-| gemini   | `GEMINI_API_KEY`                                         |
-| codex    | `CODEX_API_KEY` (for `codex exec`), `OPENAI_API_KEY` as fallback |
+## Pull requests
 
-Optional repository variables:
+升级 PR 按分支区分：
 
-- `AI_MODEL`: model name passed to every CLI attempt. When omitted, each CLI
-  uses its own default.
-- `GEMINI_MODEL`: Gemini-specific model override, used when `AI_MODEL` is
-  unset. Defaults to `auto` when both are unset.
-- `CILIUM_MIN_STABLE_PATCH`: minimum patch number required before jumping to
-  a new minor series (default: `2`). Set to `3` to require `x.y.3` before
-  crossing minors. Does not affect same-minor patch upgrades.
+- Base branch：`cilium/vX.Y`
+- Head branch：`automation/cilium-vX.Y-latest`
+- Title：`chore: 将 Cilium X.Y 升级至 X.Y.z`
 
-The implementation prompt is maintained in
-`cilium/tools/prompts/cilium-upgrade.md`. The workflow constrains generated
-changes to deployment code, tests, and project documentation; GitHub Actions
-changes must be reviewed and committed by a human.
+pull request 验证 workflow 会针对目标为 `cilium/v*` 分支的 PR 和 push 运行。
 
-## Local execution
+## 必需的仓库 secrets
 
-Install one or more of the supported CLIs and export the matching credential(s).
-The script tries copilot, then gemini, then codex, and uses the first one that
-both has a credential and succeeds:
+workflow 会按优先级依次尝试每个 AI CLI，直到其中一个成功：
+**copilot -> gemini -> codex**。只有配置了凭据 secret 的 agent 才会被尝试，
+因此可以按需要启用任意数量的 fallback。至少必须设置以下其中一项：
+
+- `COPILOT_GITHUB_TOKEN`：fine-grained PAT，需要具备 "Copilot Requests"
+  权限，并属于拥有 GitHub Copilot 访问权限的账号。
+- `GEMINI_API_KEY`：来自 Google AI Studio 的 Gemini API key。
+- `CODEX_API_KEY`：供 `codex exec` 使用的 OpenAI API key。当 `CODEX_API_KEY`
+  未设置时，会使用 `OPENAI_API_KEY` 作为 fallback。
+
+分支创建和 PR 创建还需要一个单独的 secret：
+
+- `CILIUM_UPDATE_TOKEN`：fine-grained PAT 或 GitHub App token，需要具备仓库
+  `Contents: Read and write` 和 `Pull requests: Read and write` 权限。
+
+workflow 默认的 `GITHUB_TOKEN` 绝不会用作 Copilot 凭据或 PR 创建 token。使用
+默认 token 创建的 pull request 不会触发新的 `pull_request` 事件，因此
+`.github/workflows/pr.yaml` 不会启动 e2e 任务。专用 token 会让 PR 创建表现得
+像普通用户或 app 操作，并自动触发这些测试。
+
+可选的仓库 variables：
+
+- `AI_MODEL`：传给每次 CLI 尝试的模型名称。省略时，每个 CLI 使用自己的默认值。
+- `GEMINI_MODEL`：Gemini 专用模型覆盖值，在 `AI_MODEL` 未设置时使用。两者都
+  未设置时默认值为 `auto`。
+
+实现提示词维护在 `cilium/tools/prompts/cilium-upgrade.md`。workflow 将生成的变更
+限制在部署代码、测试和项目文档内；GitHub Actions 变更必须由人工审查并提交。
+
+## 本地执行
+
+要测试维护分支的版本检测：
+
+```bash
+export CURRENT_CILIUM_VERSION=1.18.3
+export CILIUM_TARGET_MINOR=1.18
+export GITHUB_TOKEN='...' # optional for release API rate limits
+cilium/tools/run-cilium-upgrade.sh --check-only
+```
+
+要在本地运行完整升级，请安装一个或多个支持的 CLI，并导出对应凭据：
 
 ```bash
 npm install --global @github/copilot@latest
 npm install --global @google/gemini-cli@latest
 npm install --global @openai/codex@latest
 
-export COPILOT_GITHUB_TOKEN='...' # fine-grained PAT with "Copilot Requests"
-export GEMINI_API_KEY='...'       # from Google AI Studio
-export CODEX_API_KEY='...'        # OpenAI API key (or export OPENAI_API_KEY)
-export AI_MODEL=auto              # optional, applies to every attempt
-export GITHUB_TOKEN='...'         # optional for release API rate limits
-```
-
-The updater deliberately requires a clean worktree so AI changes cannot be
-mixed with unrelated local work:
-
-```bash
+export COPILOT_GITHUB_TOKEN='...'
+export GEMINI_API_KEY='...'
+export CODEX_API_KEY='...'
+export CILIUM_TARGET_MINOR=1.18
 cilium/tools/run-cilium-upgrade.sh
 ```
 
-The script performs the same operations as CI:
-
-1. Reads the pinned Cilium version and fetches all stable upstream release notes
-   between that version and the latest version.
-2. Tries each AI CLI in priority order (copilot, gemini, codex) in headless
-   mode, allowing the first successful one to edit the working tree. Failed
-   attempts are discarded before retrying with the next CLI.
-3. Verifies the target version, changed-file scope, and required PR rationale.
-4. Runs `make prepare` and `make ci-validate`.
-5. Leaves the modified files in the worktree and writes the PR description to
-   `/tmp/cilium-upgrade-pr.md`.
-
-Version detection can be tested without calling an AI CLI:
-
-```bash
-cilium/tools/run-cilium-upgrade.sh --check-only
-```
-
-For an intentionally dirty disposable worktree, set
-`CILIUM_UPGRADE_ALLOW_DIRTY=true`. This bypass is not recommended for normal
-use because AI-generated changes become difficult to distinguish from existing
-changes.
+更新器有意要求干净的 worktree，避免 AI 变更与无关本地工作混在一起。对于有意
+保持 dirty 状态的一次性 worktree，可以设置 `CILIUM_UPGRADE_ALLOW_DIRTY=true`。

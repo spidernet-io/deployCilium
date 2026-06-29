@@ -2,14 +2,16 @@ name: Validate Cilium Installation
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - 'cilium/v*'
     paths:
       - 'cilium/**'
       - 'test/**'
       - 'Makefile'
       - 'Makefile.defs'
   push:
-    branches: [main]
+    branches:
+      - 'cilium/v*'
 
 jobs:
   validate:
@@ -56,5 +58,4 @@ jobs:
           kubectl config use-context kind-cluster2 && make debug
       - if: always()
         run: make clean
-
 
