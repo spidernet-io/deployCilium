@@ -189,6 +189,7 @@ jobs:
       - name: Check out maintenance branch
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           ref: ${{ matrix.branch }}
           path: worktree
           fetch-depth: 0
@@ -255,11 +256,36 @@ jobs:
         if: steps.upgrade.outputs.changed == 'true'
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
+          set -euo pipefail
+
           test -n "${COPILOT_GITHUB_TOKEN}" || {
             echo "Missing repository secret COPILOT_GITHUB_TOKEN" >&2
             exit 1
           }
+
+          curl --fail --silent --show-error --location \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${COPILOT_GITHUB_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}" \
+            >/dev/null || {
+              echo "COPILOT_GITHUB_TOKEN is not valid for ${GITHUB_REPOSITORY}." >&2
+              echo "Check that the repository secret is current and grants Contents: Read and write plus Pull requests: Read and write." >&2
+              exit 1
+            }
+
+      - name: Configure PR branch push credentials
+        if: steps.upgrade.outputs.changed == 'true'
+        working-directory: worktree
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          git remote set-url origin "https://x-access-token:${COPILOT_GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
       - name: Create or update upgrade PR
         if: steps.upgrade.outputs.changed == 'true'
@@ -299,6 +325,7 @@ jobs:
       - name: Check out main
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Update supported Cilium versions file
@@ -329,6 +356,38 @@ jobs:
               )
             ' "${manifest_path}" > "${tmp_file}"
           mv "${tmp_file}" "${manifest_path}"
+
+      - name: Verify PR token
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          test -n "${COPILOT_GITHUB_TOKEN}" || {
+            echo "Missing repository secret COPILOT_GITHUB_TOKEN" >&2
+            exit 1
+          }
+
+          curl --fail --silent --show-error --location \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${COPILOT_GITHUB_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}" \
+            >/dev/null || {
+              echo "COPILOT_GITHUB_TOKEN is not valid for ${GITHUB_REPOSITORY}." >&2
+              echo "Check that the repository secret is current and grants Contents: Read and write plus Pull requests: Read and write." >&2
+              exit 1
+            }
+
+      - name: Configure manifest PR branch push credentials
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          git remote set-url origin "https://x-access-token:${COPILOT_GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
       - name: Create or update manifest PR
         id: manifest-pr
