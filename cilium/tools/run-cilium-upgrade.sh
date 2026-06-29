@@ -10,6 +10,16 @@ version_file="${project_root}/cilium/version.sh"
 pr_body_file=${CILIUM_UPGRADE_PR_BODY:-"/tmp/cilium-upgrade-pr.md"}
 check_only=false
 
+# Current Cilium version: prefer the value supplied by the workflow (which
+# sources cilium/version.sh). Fall back to reading version.sh directly so
+# the script remains usable for local manual runs.
+if [[ -z "${CURRENT_CILIUM_VERSION:-}" ]]; then
+    CURRENT_CILIUM_VERSION=$(
+        sed -n 's/^[[:space:]]*CILIUM_VERSION=${CILIUM_VERSION:-"\([^"]*\)"}.*/\1/p' "${version_file}"
+    )
+fi
+export CURRENT_CILIUM_VERSION
+
 usage() {
     cat <<'EOF'
 Usage: cilium/tools/run-cilium-upgrade.sh [--check-only]
@@ -20,6 +30,9 @@ The script tries each AI CLI in priority order until one succeeds:
   3. codex    (requires CODEX_API_KEY or OPENAI_API_KEY)
 
 Environment:
+  CURRENT_CILIUM_VERSION   Current pinned Cilium version (x.y.z). When set,
+                           it is forwarded to check-cilium-release.sh. When
+                           unset, the script reads cilium/version.sh itself.
   COPILOT_GITHUB_TOKEN      Copilot credential (fine-grained PAT with
                             "Copilot Requests" permission).
   GEMINI_API_KEY            Gemini API key from Google AI Studio.
