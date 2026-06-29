@@ -1,0 +1,350 @@
+name: Monthly Cilium Upgrade
+
+on:
+  schedule:
+    - cron: '23 2 20 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: monthly-cilium-upgrade
+  cancel-in-progress: false
+
+jobs:
+  prepare-branches:
+    name: Prepare maintenance branches
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      branches: ${{ steps.discover.outputs.branches }}
+      manifest: ${{ steps.discover.outputs.manifest }}
+
+    steps:
+      - name: Check out updater branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read supported minors and create branches
+        id: discover
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          manifest_path=".github/cilium-supported-versions.json"
+          api_url="https://api.github.com/repos/cilium/cilium/releases?per_page=100"
+          headers=(
+            -H "Accept: application/vnd.github+json"
+            -H "X-GitHub-Api-Version: 2022-11-28"
+            -H "Authorization: Bearer ${GITHUB_TOKEN}"
+          )
+
+          if [[ ! -f "${manifest_path}" ]]; then
+            echo "Missing ${manifest_path}." >&2
+            exit 1
+          fi
+
+          mapfile -t supported_minors < <(
+            jq -r '
+              .supported
+              | map(select(.enabled != false))
+              | .[].minor
+            ' "${manifest_path}" | sort -V
+          )
+
+          if [[ ${#supported_minors[@]} -eq 0 ]]; then
+            echo "No enabled Cilium minors are configured in ${manifest_path}." >&2
+            exit 1
+          fi
+
+          for minor in "${supported_minors[@]}"; do
+            if [[ ! "${minor}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+              echo "Invalid Cilium minor in ${manifest_path}: ${minor}" >&2
+              exit 1
+            fi
+          done
+
+          releases_json=$(mktemp)
+          curl --fail --silent --show-error --location "${headers[@]}" "${api_url}" > "${releases_json}"
+
+          mapfile -t stable_versions < <(
+            jq -r '
+              .[]
+              | select(.draft == false and .prerelease == false)
+              | .tag_name
+              | select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+$"))
+              | sub("^v"; "")
+            ' "${releases_json}" | sort -V
+          )
+
+          if [[ ${#stable_versions[@]} -eq 0 ]]; then
+            echo "No stable Cilium release found." >&2
+            exit 1
+          fi
+
+          echo "Configured Cilium minors: $(printf '%s ' "${supported_minors[@]}")"
+
+          mapfile -t branches < <(
+            git ls-remote --heads origin 'cilium/v*' |
+              sed 's#.*refs/heads/##' |
+              sort -V
+          )
+          if [[ ${#branches[@]} -gt 0 ]]; then
+            echo "Existing maintenance branches: $(printf '%s ' "${branches[@]}")"
+          else
+            echo "Existing maintenance branches: none"
+          fi
+
+          branch_exists() {
+            local wanted="$1"
+            local branch
+            for branch in "${branches[@]}"; do
+              if [[ "${branch}" == "${wanted}" ]]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          source_branch="${GITHUB_REF_NAME}"
+          matrix_file=$(mktemp)
+          : > "${matrix_file}"
+
+          for minor in "${supported_minors[@]}"; do
+            new_branch="cilium/v${minor}"
+            if branch_exists "${new_branch}"; then
+              source_branch="${new_branch}"
+            else
+              branch_push_token="${COPILOT_GITHUB_TOKEN:-${GITHUB_TOKEN}}"
+              if [[ -z "${branch_push_token}" ]]; then
+                echo "Missing token; required to create ${new_branch} from ${source_branch}." >&2
+                exit 1
+              fi
+
+              echo "Creating ${new_branch} from ${source_branch}."
+              git fetch origin "+refs/heads/${source_branch}:refs/remotes/origin/${source_branch}"
+              git push \
+                "https://x-access-token:${branch_push_token}@github.com/${GITHUB_REPOSITORY}.git" \
+                "refs/remotes/origin/${source_branch}:refs/heads/${new_branch}"
+
+              branches+=("${new_branch}")
+              source_branch="${new_branch}"
+            fi
+
+            latest_version=$(
+              printf '%s\n' "${stable_versions[@]}" |
+                awk -F. -v minor="${minor}" '$1 "." $2 == minor { print }' |
+                sort -V |
+                tail -n 1
+            )
+            if [[ -z "${latest_version}" ]]; then
+              echo "No stable Cilium releases found for ${minor}." >&2
+              exit 1
+            fi
+
+            jq -n \
+              --arg branch "${new_branch}" \
+              --arg target_minor "${minor}" \
+              --arg latest_version "${latest_version}" \
+              '{branch: $branch, target_minor: $target_minor, latest_version: $latest_version}' \
+              >> "${matrix_file}"
+          done
+
+          branches_json=$(
+            jq -s -c 'sort_by(.target_minor | split(".") | map(tonumber))' "${matrix_file}"
+          )
+          manifest_json=$(
+            jq -n -c --argjson branches "${branches_json}" \
+              --arg checked_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              '{checked_at: $checked_at, supported: $branches}'
+          )
+
+          echo "Discovered branches: ${branches_json}"
+          echo "branches=${branches_json}" >> "${GITHUB_OUTPUT}"
+          echo "manifest=${manifest_json}" >> "${GITHUB_OUTPUT}"
+
+  upgrade:
+    name: Check and propose upgrade
+    needs: prepare-branches
+    if: needs.prepare-branches.outputs.branches != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare-branches.outputs.branches) }}
+
+    steps:
+      - name: Check out updater scripts
+        uses: actions/checkout@v4
+        with:
+          path: updater
+          fetch-depth: 0
+
+      - name: Check out maintenance branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          path: worktree
+          fetch-depth: 0
+
+      - name: Read current Cilium version
+        id: current
+        working-directory: worktree
+        run: |
+          source cilium/version.sh
+          echo "version=${CILIUM_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install AI CLIs and validation tools
+        working-directory: worktree
+        run: |
+          npm install --global \
+            @github/copilot@latest \
+            opencode-ai@latest
+          make install-tools
+
+      - name: Check AI credentials
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          echo "Repository: ${GITHUB_REPOSITORY}"
+          echo "Event: ${GITHUB_EVENT_NAME}"
+          echo "Ref: ${GITHUB_REF}"
+          echo "Ref name: ${GITHUB_REF_NAME}"
+
+          if [[ -n "${COPILOT_GITHUB_TOKEN}" ]]; then
+            echo "COPILOT_GITHUB_TOKEN is available."
+          else
+            echo "COPILOT_GITHUB_TOKEN is empty." >&2
+          fi
+
+          if command -v opencode >/dev/null 2>&1; then
+            echo "opencode is installed."
+          else
+            echo "opencode is not installed." >&2
+          fi
+
+          if [[ -n "${DEEPSEEK_API_KEY}" ]]; then
+            echo "DEEPSEEK_API_KEY is available."
+          else
+            echo "DEEPSEEK_API_KEY is empty." >&2
+          fi
+
+      - name: Run upgrade script
+        id: upgrade
+        env:
+          CURRENT_CILIUM_VERSION: ${{ steps.current.outputs.version }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          CILIUM_TARGET_MINOR: ${{ matrix.target_minor }}
+          CILIUM_PROJECT_ROOT: ${{ github.workspace }}/worktree
+          CILIUM_UPDATER_ROOT: ${{ github.workspace }}/updater
+        run: |
+          updater/cilium/tools/run-cilium-upgrade.sh
+
+      - name: Verify PR token
+        if: steps.upgrade.outputs.changed == 'true'
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          test -n "${COPILOT_GITHUB_TOKEN}" || {
+            echo "Missing repository secret COPILOT_GITHUB_TOKEN" >&2
+            exit 1
+          }
+
+      - name: Create or update upgrade PR
+        if: steps.upgrade.outputs.changed == 'true'
+        id: cpr
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          path: worktree
+          base: ${{ matrix.branch }}
+          branch: automation/cilium-v${{ matrix.target_minor }}-latest
+          delete-branch: true
+          commit-message: |
+            chore: 将 Cilium ${{ matrix.target_minor }} 升级至 ${{ steps.upgrade.outputs.latest_version }}
+          title: 'chore: 将 Cilium ${{ matrix.target_minor }} 升级至 ${{ steps.upgrade.outputs.latest_version }}'
+          body-path: ${{ steps.upgrade.outputs.pr_body_path }}
+          add-paths: |
+            cilium/**
+            test/**
+            README.md
+            Makefile
+            Makefile.defs
+
+      - name: Report pull request
+        if: steps.cpr.outputs.pull-request-url
+        run: echo "${{ steps.cpr.outputs.pull-request-url }}"
+
+  update-version-manifest:
+    name: Update version manifest
+    needs:
+      - prepare-branches
+      - upgrade
+    if: needs.upgrade.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update supported Cilium versions file
+        env:
+          MANIFEST_JSON: ${{ needs.prepare-branches.outputs.manifest }}
+        run: |
+          set -euo pipefail
+
+          manifest_path=".github/cilium-supported-versions.json"
+          tmp_file=$(mktemp)
+
+          jq \
+            --argjson discovered "${MANIFEST_JSON}" \
+            '
+              .supported |= (
+                map(
+                  . as $entry
+                  | ($discovered.supported | map(select(.target_minor == $entry.minor)) | first) as $latest
+                  | if $latest == null then
+                      .
+                    elif .latest_version == $latest.latest_version then
+                      .
+                    else
+                      .latest_version = $latest.latest_version
+                      | .updated_at = $discovered.checked_at
+                    end
+                )
+              )
+            ' "${manifest_path}" > "${tmp_file}"
+          mv "${tmp_file}" "${manifest_path}"
+
+      - name: Create or update manifest PR
+        id: manifest-pr
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          base: main
+          branch: automation/cilium-supported-versions
+          delete-branch: true
+          commit-message: 'chore: 更新 Cilium 支持版本清单'
+          title: 'chore: 更新 Cilium 支持版本清单'
+          body: |
+            更新 `.github/cilium-supported-versions.json` 中记录的 Cilium 最新 patch 版本。
+          add-paths: |
+            .github/cilium-supported-versions.json
+
+      - name: Report manifest pull request
+        if: steps.manifest-pr.outputs.pull-request-url
+        run: echo "${{ steps.manifest-pr.outputs.pull-request-url }}"
