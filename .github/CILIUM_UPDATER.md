@@ -72,30 +72,28 @@ pull request 验证 workflow 会针对目标为 `cilium/v*` 分支的 PR 和 pus
 ## 必需的仓库 secrets
 
 workflow 会按优先级依次尝试每个 AI CLI，直到其中一个成功：
-**copilot -> gemini -> codex**。只有配置了凭据 secret 的 agent 才会被尝试，
+**copilot -> codex**。只有配置了凭据 secret 的 agent 才会被尝试，
 因此可以按需要启用任意数量的 fallback。至少必须设置以下其中一项：
 
 - `COPILOT_GITHUB_TOKEN`：fine-grained PAT，需要具备 "Copilot Requests"
   权限，并属于拥有 GitHub Copilot 访问权限的账号。
-- `GEMINI_API_KEY`：来自 Google AI Studio 的 Gemini API key。
 - `CODEX_API_KEY`：供 `codex exec` 使用的 OpenAI API key。当 `CODEX_API_KEY`
   未设置时，会使用 `OPENAI_API_KEY` 作为 fallback。
 
-分支创建和 PR 创建还需要一个单独的 secret：
+PR 创建还需要一个单独的 secret：
 
 - `CILIUM_UPDATE_TOKEN`：fine-grained PAT 或 GitHub App token，需要具备仓库
   `Contents: Read and write` 和 `Pull requests: Read and write` 权限。
 
-workflow 默认的 `GITHUB_TOKEN` 绝不会用作 Copilot 凭据或 PR 创建 token。使用
-默认 token 创建的 pull request 不会触发新的 `pull_request` 事件，因此
-`.github/workflows/pr.yaml` 不会启动 e2e 任务。专用 token 会让 PR 创建表现得
-像普通用户或 app 操作，并自动触发这些测试。
+创建缺失的 `cilium/vX.Y` 维护分支时，workflow 会优先使用 `CILIUM_UPDATE_TOKEN`，
+未设置时回退到默认 `GITHUB_TOKEN`。workflow 默认的 `GITHUB_TOKEN` 绝不会用作
+Copilot 凭据或 PR 创建 token。使用默认 token 创建的 pull request 不会触发新的
+`pull_request` 事件，因此 `.github/workflows/pr.yaml` 不会启动 e2e 任务。
+专用 token 会让 PR 创建表现得像普通用户或 app 操作，并自动触发这些测试。
 
 可选的仓库 variables：
 
 - `AI_MODEL`：传给每次 CLI 尝试的模型名称。省略时，每个 CLI 使用自己的默认值。
-- `GEMINI_MODEL`：Gemini 专用模型覆盖值，在 `AI_MODEL` 未设置时使用。两者都
-  未设置时默认值为 `auto`。
 
 实现提示词维护在 `cilium/tools/prompts/cilium-upgrade.md`。workflow 将生成的变更
 限制在部署代码、测试和项目文档内；GitHub Actions 变更必须由人工审查并提交。
@@ -115,11 +113,9 @@ cilium/tools/run-cilium-upgrade.sh --check-only
 
 ```bash
 npm install --global @github/copilot@latest
-npm install --global @google/gemini-cli@latest
 npm install --global @openai/codex@latest
 
 export COPILOT_GITHUB_TOKEN='...'
-export GEMINI_API_KEY='...'
 export CODEX_API_KEY='...'
 export CILIUM_TARGET_MINOR=1.18
 cilium/tools/run-cilium-upgrade.sh

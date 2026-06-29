@@ -28,8 +28,7 @@ Usage: cilium/tools/run-cilium-upgrade.sh [--check-only]
 
 The script tries each AI CLI in priority order until one succeeds:
   1. copilot  (requires COPILOT_GITHUB_TOKEN)
-  2. gemini   (requires GEMINI_API_KEY)
-  3. codex    (requires CODEX_API_KEY or OPENAI_API_KEY)
+  2. codex    (requires CODEX_API_KEY or OPENAI_API_KEY)
 
 Environment:
   CURRENT_CILIUM_VERSION   Current pinned Cilium version (x.y.z). When set,
@@ -40,13 +39,10 @@ Environment:
                             this from their branch name, e.g. cilium/v1.18.
   COPILOT_GITHUB_TOKEN      Copilot credential (fine-grained PAT with
                             "Copilot Requests" permission).
-  GEMINI_API_KEY            Gemini API key from Google AI Studio.
   CODEX_API_KEY             OpenAI API key for `codex exec` (preferred).
   OPENAI_API_KEY            Fallback credential for codex when CODEX_API_KEY
                             is unset.
   AI_MODEL                  Optional model name passed to every CLI attempt.
-  GEMINI_MODEL              Gemini-specific model override (used when
-                            AI_MODEL is unset).
   GITHUB_TOKEN              Optional GitHub API token for release queries.
   CILIUM_UPGRADE_PR_BODY    Optional PR body path.
   CILIUM_UPGRADE_ALLOW_DIRTY
@@ -154,25 +150,21 @@ fi
 
 agent_prompt="Read and follow ${prompt_file}. Read ${context_file} for the complete release-note range. Upgrade only the target Cilium minor recorded in that context; do not select a different Cilium minor. Modify this working tree and return only the required Markdown PR body. The complete PR body must be written in Chinese."
 
-# Priority order: copilot -> gemini -> codex.
-agent_order=(copilot gemini codex)
+# Priority order: copilot -> codex.
+agent_order=(copilot codex)
 success_agent=""
 
 # Return the credential for a given agent, or empty if none is configured.
 credential_for() {
     case "$1" in
         copilot) printf '%s' "${COPILOT_GITHUB_TOKEN:-}" ;;
-        gemini)  printf '%s' "${GEMINI_API_KEY:-}" ;;
         codex)   printf '%s' "${CODEX_API_KEY:-${OPENAI_API_KEY:-}}" ;;
     esac
 }
 
 # Return the model name for a given agent, or empty to use the CLI default.
 model_for() {
-    case "$1" in
-        gemini) printf '%s' "${AI_MODEL:-${GEMINI_MODEL:-}}" ;;
-        *)      printf '%s' "${AI_MODEL:-}" ;;
-    esac
+    printf '%s' "${AI_MODEL:-}"
 }
 
 # Reset the working tree to a clean state so a failed attempt does not pollute
@@ -184,7 +176,6 @@ reset_worktree() {
     git clean -fd -e cilium/tools/cilium-upgrade-context.md \
         -- cilium test README.md Makefile Makefile.defs 2>/dev/null || true
     rm -f "${pr_body_file}"
-    rm -rf .gemini
 }
 
 # Run a single AI CLI. Returns 0 on success, non-zero on failure.
@@ -213,22 +204,6 @@ run_single_agent() {
                 --output-format text \
                 "${model_args[@]}" \
                 > "${pr_body_file}" 2> "${ai_output}"
-            ;;
-        gemini)
-            GEMINI_API_KEY="${credential}" \
-            gemini \
-                --approval-mode yolo \
-                --skip-trust \
-                "${model_args[@]}" \
-                --output-format json \
-                --prompt "${agent_prompt}" \
-                > "${ai_output}" 2>&1
-            if jq -e '.error == null and (.response | type == "string")' "${ai_output}" >/dev/null 2>&1; then
-                jq -r '.response' "${ai_output}" > "${pr_body_file}"
-            else
-                return 1
-            fi
-            rm -rf .gemini
             ;;
         codex)
             CODEX_API_KEY="${credential}" \
@@ -316,7 +291,7 @@ done
 rm -f "${context_file}"
 
 if [[ -z "${success_agent}" ]]; then
-    echo "All AI agents (copilot, gemini, codex) failed or were unavailable." >&2
+    echo "All AI agents (copilot, codex) failed or were unavailable." >&2
     exit 1
 fi
 
