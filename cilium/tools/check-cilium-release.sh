@@ -19,6 +19,26 @@ if [[ ! "${current_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 current_major_minor=$(printf '%s' "${current_version}" | cut -d. -f1-2)
+
+infer_target_minor_from_ref() {
+    local ref
+
+    for ref in \
+        "${GITHUB_HEAD_REF:-}" \
+        "${GITHUB_REF_NAME:-}" \
+        "$(git -C "${project_root}" branch --show-current 2>/dev/null || true)"
+    do
+        if [[ "${ref}" =~ (^|/)cilium/v([0-9]+\.[0-9]+)$ ]]; then
+            printf '%s' "${BASH_REMATCH[2]}"
+            return 0
+        fi
+    done
+}
+
+if [[ -z "${target_minor}" ]]; then
+    target_minor="$(infer_target_minor_from_ref)"
+fi
+
 if [[ -z "${target_minor}" ]]; then
     target_minor="${current_major_minor}"
 fi

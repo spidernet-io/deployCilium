@@ -28,7 +28,7 @@ Usage: cilium/tools/run-cilium-upgrade.sh [--check-only]
 
 The script tries each AI CLI in priority order until one succeeds:
   1. copilot  (requires COPILOT_GITHUB_TOKEN)
-  2. codex    (requires CODEX_API_KEY or OPENAI_API_KEY)
+  2. deepseek (requires DEEPSEEK_API_KEY and opencode)
 
 Environment:
   CURRENT_CILIUM_VERSION   Current pinned Cilium version (x.y.z). When set,
@@ -39,10 +39,12 @@ Environment:
                             this from their branch name, e.g. cilium/v1.18.
   COPILOT_GITHUB_TOKEN      Copilot credential (fine-grained PAT with
                             "Copilot Requests" permission).
-  CODEX_API_KEY             OpenAI API key for `codex exec` (preferred).
-  OPENAI_API_KEY            Fallback credential for codex when CODEX_API_KEY
-                            is unset.
-  AI_MODEL                  Optional model name passed to every CLI attempt.
+  COPILOT_MODEL             Optional model name passed to copilot.
+  DEEPSEEK_API_KEY          DeepSeek API key used by `opencode run`.
+  DEEPSEEK_MODEL            Optional opencode model name. Defaults to
+                            deepseek/deepseek-v4-flash.
+  AI_MODEL                  Optional fallback model name when an agent-specific
+                            model variable is unset.
   GITHUB_TOKEN              Optional GitHub API token for release queries.
   CILIUM_UPGRADE_PR_BODY    Optional PR body path.
   CILIUM_UPGRADE_ALLOW_DIRTY
@@ -150,21 +152,24 @@ fi
 
 agent_prompt="Read and follow ${prompt_file}. Read ${context_file} for the complete release-note range. Upgrade only the target Cilium minor recorded in that context; do not select a different Cilium minor. Modify this working tree and return only the required Markdown PR body. The complete PR body must be written in Chinese."
 
-# Priority order: copilot -> codex.
-agent_order=(copilot codex)
+# Priority order: copilot -> deepseek.
+agent_order=(copilot deepseek)
 success_agent=""
 
 # Return the credential for a given agent, or empty if none is configured.
 credential_for() {
     case "$1" in
         copilot) printf '%s' "${COPILOT_GITHUB_TOKEN:-}" ;;
-        codex)   printf '%s' "${CODEX_API_KEY:-${OPENAI_API_KEY:-}}" ;;
+        deepseek) printf '%s' "${DEEPSEEK_API_KEY:-}" ;;
     esac
 }
 
 # Return the model name for a given agent, or empty to use the CLI default.
 model_for() {
-    printf '%s' "${AI_MODEL:-}"
+    case "$1" in
+        copilot)  printf '%s' "${COPILOT_MODEL:-${AI_MODEL:-}}" ;;
+        deepseek) printf '%s' "${DEEPSEEK_MODEL:-${AI_MODEL:-deepseek/deepseek-v4-flash}}" ;;
+    esac
 }
 
 # Reset the working tree to a clean state so a failed attempt does not pollute
@@ -205,18 +210,33 @@ run_single_agent() {
                 "${model_args[@]}" \
                 > "${pr_body_file}" 2> "${ai_output}"
             ;;
-        codex)
-            CODEX_API_KEY="${credential}" \
-            codex exec \
-                --dangerously-bypass-approvals-and-sandbox \
-                --ephemeral \
-                --cd "${project_root}" \
+        deepseek)
+            DEEPSEEK_API_KEY="${credential}" \
+            opencode run \
+                --dir "${project_root}" \
+                --dangerously-skip-permissions \
+                --variant high \
                 "${model_args[@]}" \
-                --output-last-message "${pr_body_file}" \
                 "${agent_prompt}" \
-                > "${ai_output}" 2>&1
+                > "${pr_body_file}" 2> "${ai_output}"
             ;;
     esac
+}
+
+print_ai_output() {
+    local agent="$1"
+
+    if [[ ! -s "${ai_output}" ]]; then
+        echo "${agent} produced no CLI output." >&2
+        return 0
+    fi
+
+    echo "::group::${agent} CLI output" >&2
+    sed -n '1,240p' "${ai_output}" >&2
+    if [[ "$(wc -l < "${ai_output}")" -gt 240 ]]; then
+        echo "... output truncated; showing first 240 lines" >&2
+    fi
+    echo "::endgroup::" >&2
 }
 
 # Validate that the PR body contains every required section and that the
@@ -272,10 +292,20 @@ for agent in "${agent_order[@]}"; do
         echo "Skipping ${agent}: no credential configured."
         continue
     fi
-    if ! command -v "${agent}" >/dev/null 2>&1; then
-        echo "Skipping ${agent}: CLI not installed."
-        continue
-    fi
+    case "${agent}" in
+        copilot)
+            if ! command -v copilot >/dev/null 2>&1; then
+                echo "Skipping ${agent}: CLI not installed."
+                continue
+            fi
+            ;;
+        deepseek)
+            if ! command -v opencode >/dev/null 2>&1; then
+                echo "Skipping ${agent}: opencode CLI not installed."
+                continue
+            fi
+            ;;
+    esac
 
     echo "Attempting Cilium upgrade with ${agent}..."
     if run_single_agent "${agent}" && validate_upgrade "${agent}"; then
@@ -284,6 +314,7 @@ for agent in "${agent_order[@]}"; do
         break
     fi
 
+    print_ai_output "${agent}"
     echo "${agent} failed; resetting worktree before next attempt." >&2
     reset_worktree
 done
@@ -291,7 +322,7 @@ done
 rm -f "${context_file}"
 
 if [[ -z "${success_agent}" ]]; then
-    echo "All AI agents (copilot, codex) failed or were unavailable." >&2
+    echo "All AI agents (copilot, deepseek) failed or were unavailable." >&2
     exit 1
 fi
 
