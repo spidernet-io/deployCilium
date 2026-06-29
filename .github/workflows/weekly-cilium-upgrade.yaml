@@ -112,15 +112,16 @@ jobs:
               continue
             fi
 
-            if [[ -z "${CILIUM_UPDATE_TOKEN}" ]]; then
-              echo "Missing CILIUM_UPDATE_TOKEN; required to create ${new_branch} from ${source_branch}." >&2
+            branch_push_token="${COPILOT_GITHUB_TOKEN:-${GITHUB_TOKEN}}"
+            if [[ -z "${branch_push_token}" ]]; then
+              echo "Missing token; required to create ${new_branch} from ${source_branch}." >&2
               exit 1
             fi
 
             echo "Creating ${new_branch} from ${source_branch}."
             git fetch origin "+refs/heads/${source_branch}:refs/remotes/origin/${source_branch}"
             git push \
-              "https://x-access-token:${CILIUM_UPDATE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+              "https://x-access-token:${branch_push_token}@github.com/${GITHUB_REPOSITORY}.git" \
               "refs/remotes/origin/${source_branch}:refs/heads/${new_branch}"
 
             branches+=("${new_branch}")
@@ -181,7 +182,6 @@ jobs:
         run: |
           npm install --global \
             @github/copilot@latest \
-            @google/gemini-cli@latest \
             @openai/codex@latest
           make install-tools
 
@@ -190,9 +190,7 @@ jobs:
         env:
           CURRENT_CILIUM_VERSION: ${{ steps.current.outputs.version }}
           AI_MODEL: ${{ vars.AI_MODEL }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -205,10 +203,10 @@ jobs:
       - name: Verify PR token
         if: steps.upgrade.outputs.changed == 'true'
         env:
-          CILIUM_UPDATE_TOKEN: ${{ secrets.CILIUM_UPDATE_TOKEN }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
-          test -n "${CILIUM_UPDATE_TOKEN}" || {
-            echo "Missing repository secret CILIUM_UPDATE_TOKEN" >&2
+          test -n "${COPILOT_GITHUB_TOKEN}" || {
+            echo "Missing repository secret COPILOT_GITHUB_TOKEN" >&2
             exit 1
           }
 
@@ -217,7 +215,7 @@ jobs:
         id: cpr
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.CILIUM_UPDATE_TOKEN }}
+          token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           path: worktree
           base: ${{ matrix.branch }}
           branch: automation/cilium-v${{ matrix.target_minor }}-latest
