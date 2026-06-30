@@ -189,7 +189,7 @@ jobs:
       - name: Check out maintenance branch
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          token: ${{ github.token }}
           ref: ${{ matrix.branch }}
           path: worktree
           fetch-depth: 0
