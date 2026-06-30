@@ -106,7 +106,7 @@ loadBalancer:
 
   # DSR currently requires Cilium to be deployed in Native-Routing(no tunnel), i.e. it will not work in either tunneling mode
   # loadBalancer.dsrDispatch: =opt  for ip , =ipip for ipip
-  # loadBalancer.dsrDispatch=ipip 要求 支持部署 基于 xdp 的  独立的 L4 LoadBalancer : --set loadBalancer.standalone=true
+  # loadBalancer.dsrDispatch=ipip 要求 支持部署 基于 xdp 的  独立的 L4 LoadBalancer（该选项已在 1.19.5 中移除）
   dsrDispatch: "opt"
 
   # loadBalancer.acceleration = native , for xdp nodeport
@@ -121,7 +121,8 @@ encryption:
   enabled: false
 
 
-sessionAffinity: true
+# 会话亲和性从 1.19 起默认为启用，对应的 Helm 选项已移除。
+# 参见上游 1.19 升级说明 "Removed Options" 章节。
 
 # node 为 本地 pod 在pod 启动时发送 免费ARP， 但 pod 运行时，不会响应平时 arp请求
 l2podAnnouncements:
@@ -220,7 +221,12 @@ certgen:
 clustermesh:
   useAPIServer: true
   enableEndpointSliceSynchronization: true
-  enableMCSAPISupport: false
+  mcsapi:
+    enabled: false
+  # 保留 v1.18 行为：网络策略默认选择所有集群的端点。
+  # 从 Cilium 1.19 起该选项默认为 true，限制为仅本地集群。
+  # 参见上游升级指南的 "policy-default-local-cluster" 章节。
+  policyDefaultLocalCluster: false
   apiserver:
     tls:
       auto:
