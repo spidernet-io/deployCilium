@@ -98,17 +98,23 @@ workflow 会按优先级依次尝试每个 AI CLI，直到其中一个成功：
 **copilot -> deepseek**。只有配置了凭据 secret 的 agent 才会被尝试，
 因此可以按需要启用任意数量的 fallback。至少必须设置以下其中一项：
 
-- `COPILOT_GITHUB_TOKEN`：fine-grained PAT，需要具备 "Copilot Requests"、
-  `Contents: Read and write` 和 `Pull requests: Read and write` 权限，并属于拥有
-  GitHub Copilot 访问权限的账号。workflow 也使用该 token 创建维护分支和 PR。
+- `COPILOT_GITHUB_TOKEN`：供 GitHub Copilot CLI 使用的凭据，需要具备
+  "Copilot Requests" 权限，并属于拥有 GitHub Copilot 访问权限的账号。
 - `DEEPSEEK_API_KEY`：供 `opencode run` 调用 DeepSeek 使用的 API key。
 
-创建缺失的 `cilium/vX.Y` 维护分支时，workflow 会优先使用 `COPILOT_GITHUB_TOKEN`，
-未设置时回退到默认 `GITHUB_TOKEN`。创建或更新 PR 时必须设置 `COPILOT_GITHUB_TOKEN`。
-workflow 默认的 `GITHUB_TOKEN` 绝不会用作 Copilot 凭据或 PR 创建 token。使用默认
-token 创建的 pull request 不会触发新的 `pull_request` 事件，因此
-`.github/workflows/pr.yaml` 不会启动 e2e 任务。`COPILOT_GITHUB_TOKEN` 会让 PR 创建
-表现得像普通用户操作，并自动触发这些测试。
+创建维护分支、推送自动化分支、创建或更新 PR 需要额外配置：
+
+- `AUTOMATION_GITHUB_TOKEN`：fine-grained PAT，需要授权给
+  `spidernet-io/deployCilium`，并授予 `Contents: Read and write` 和
+  `Pull requests: Read and write` 权限。建议使用独立的自动化账号 token。
+
+创建缺失的 `cilium/vX.Y` 维护分支时，workflow 会优先使用
+`AUTOMATION_GITHUB_TOKEN`，未设置时依次回退到 `COPILOT_GITHUB_TOKEN` 和默认
+`GITHUB_TOKEN`。创建或更新 PR 时优先使用 `AUTOMATION_GITHUB_TOKEN`；为了兼容旧配置，
+未设置时会回退到 `COPILOT_GITHUB_TOKEN`。workflow 默认的 `GITHUB_TOKEN` 绝不会用作
+Copilot 凭据或 PR 创建 token。使用默认 token 创建的 pull request 不会触发新的
+`pull_request` 事件，因此 `.github/workflows/pr.yaml` 不会启动 e2e 任务。
+`AUTOMATION_GITHUB_TOKEN` 会让 PR 创建表现得像普通用户操作，并自动触发这些测试。
 
 可选的仓库 variables：
 
