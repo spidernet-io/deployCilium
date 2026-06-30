@@ -33,6 +33,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          AUTOMATION_GITHUB_TOKEN: ${{ secrets.AUTOMATION_GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -120,7 +121,7 @@ jobs:
             if branch_exists "${new_branch}"; then
               source_branch="${new_branch}"
             else
-              branch_push_token="${COPILOT_GITHUB_TOKEN:-${GITHUB_TOKEN}}"
+              branch_push_token="${AUTOMATION_GITHUB_TOKEN:-${COPILOT_GITHUB_TOKEN:-${GITHUB_TOKEN}}}"
               if [[ -z "${branch_push_token}" ]]; then
                 echo "Missing token; required to create ${new_branch} from ${source_branch}." >&2
                 exit 1
@@ -255,24 +256,24 @@ jobs:
       - name: Verify PR token
         if: steps.upgrade.outputs.changed == 'true'
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          PR_GITHUB_TOKEN: ${{ secrets.AUTOMATION_GITHUB_TOKEN || secrets.COPILOT_GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          test -n "${COPILOT_GITHUB_TOKEN}" || {
-            echo "Missing repository secret COPILOT_GITHUB_TOKEN" >&2
+          test -n "${PR_GITHUB_TOKEN}" || {
+            echo "Missing repository secret AUTOMATION_GITHUB_TOKEN; falling back to COPILOT_GITHUB_TOKEN also found nothing." >&2
             exit 1
           }
 
           curl --fail --silent --show-error --location \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${COPILOT_GITHUB_TOKEN}" \
+            -H "Authorization: Bearer ${PR_GITHUB_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}" \
             >/dev/null || {
-              echo "COPILOT_GITHUB_TOKEN is not valid for ${GITHUB_REPOSITORY}." >&2
-              echo "Check that the repository secret is current and grants Contents: Read and write plus Pull requests: Read and write." >&2
+              echo "PR GitHub token is not valid for ${GITHUB_REPOSITORY}." >&2
+              echo "Set AUTOMATION_GITHUB_TOKEN to a fine-grained PAT that grants Contents: Read and write plus Pull requests: Read and write." >&2
               exit 1
             }
 
@@ -280,19 +281,19 @@ jobs:
         if: steps.upgrade.outputs.changed == 'true'
         working-directory: worktree
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          PR_GITHUB_TOKEN: ${{ secrets.AUTOMATION_GITHUB_TOKEN || secrets.COPILOT_GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          git remote set-url origin "https://x-access-token:${COPILOT_GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git remote set-url origin "https://x-access-token:${PR_GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
       - name: Create or update upgrade PR
         if: steps.upgrade.outputs.changed == 'true'
         id: cpr
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          token: ${{ secrets.AUTOMATION_GITHUB_TOKEN || secrets.COPILOT_GITHUB_TOKEN }}
           path: worktree
           base: ${{ matrix.branch }}
           branch: automation/cilium-v${{ matrix.target_minor }}-latest
@@ -325,7 +326,7 @@ jobs:
       - name: Check out main
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          token: ${{ secrets.AUTOMATION_GITHUB_TOKEN || secrets.COPILOT_GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Update supported Cilium versions file
@@ -359,41 +360,41 @@ jobs:
 
       - name: Verify PR token
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          PR_GITHUB_TOKEN: ${{ secrets.AUTOMATION_GITHUB_TOKEN || secrets.COPILOT_GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          test -n "${COPILOT_GITHUB_TOKEN}" || {
-            echo "Missing repository secret COPILOT_GITHUB_TOKEN" >&2
+          test -n "${PR_GITHUB_TOKEN}" || {
+            echo "Missing repository secret AUTOMATION_GITHUB_TOKEN; falling back to COPILOT_GITHUB_TOKEN also found nothing." >&2
             exit 1
           }
 
           curl --fail --silent --show-error --location \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${COPILOT_GITHUB_TOKEN}" \
+            -H "Authorization: Bearer ${PR_GITHUB_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}" \
             >/dev/null || {
-              echo "COPILOT_GITHUB_TOKEN is not valid for ${GITHUB_REPOSITORY}." >&2
-              echo "Check that the repository secret is current and grants Contents: Read and write plus Pull requests: Read and write." >&2
+              echo "PR GitHub token is not valid for ${GITHUB_REPOSITORY}." >&2
+              echo "Set AUTOMATION_GITHUB_TOKEN to a fine-grained PAT that grants Contents: Read and write plus Pull requests: Read and write." >&2
               exit 1
             }
 
       - name: Configure manifest PR branch push credentials
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          PR_GITHUB_TOKEN: ${{ secrets.AUTOMATION_GITHUB_TOKEN || secrets.COPILOT_GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          git remote set-url origin "https://x-access-token:${COPILOT_GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git remote set-url origin "https://x-access-token:${PR_GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
       - name: Create or update manifest PR
         id: manifest-pr
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          token: ${{ secrets.AUTOMATION_GITHUB_TOKEN || secrets.COPILOT_GITHUB_TOKEN }}
           base: main
           branch: automation/cilium-supported-versions
           delete-branch: true
