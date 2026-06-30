@@ -88,7 +88,8 @@ minor 为起点复制出来的。Hubble CLI 也按同一个 `X.Y` minor 选择
 
 - Base branch：`cilium/vX.Y`
 - Head branch：`automation/cilium-vX.Y-latest`
-- Title：`chore: 将 Cilium X.Y 升级至 X.Y.z`
+- Commit message 和 title：
+  `[AutoUpdate vX.Y] Cilium version vCURRENT -> vTARGET`
 
 pull request 验证 workflow 会针对目标为 `cilium/v*` 分支的 PR 和 push 运行。
 
@@ -96,10 +97,12 @@ pull request 验证 workflow 会针对目标为 `cilium/v*` 分支的 PR 和 pus
 
 workflow 会按优先级依次尝试每个 AI CLI，直到其中一个成功：
 **copilot -> deepseek**。只有配置了凭据 secret 的 agent 才会被尝试，
-因此可以按需要启用任意数量的 fallback。至少必须设置以下其中一项：
+因此可以按需要启用任意数量的 fallback。每个 agent 默认最多尝试 3 次，
+单次尝试超时时间为 15 分钟。至少必须设置以下其中一项：
 
-- `COPILOT_GITHUB_TOKEN`：供 GitHub Copilot CLI 使用的凭据，需要具备
-  "Copilot Requests" 权限，并属于拥有 GitHub Copilot 访问权限的账号。
+- `COPILOT_GITHUB_TOKEN`：供 GitHub Copilot CLI 使用的凭据。Copilot CLI 不接受
+  `ghp_` 开头的 classic PAT；应使用 `copilot /login` 获得的 Copilot OAuth token，
+  并属于拥有 GitHub Copilot 访问权限的账号。
 - `DEEPSEEK_API_KEY`：供 `opencode run` 调用 DeepSeek 使用的 API key。
 
 创建维护分支、推送自动化分支、创建或更新 PR 需要额外配置：
@@ -108,20 +111,32 @@ workflow 会按优先级依次尝试每个 AI CLI，直到其中一个成功：
   `spidernet-io/deployCilium`，并授予 `Contents: Read and write` 和
   `Pull requests: Read and write` 权限。建议使用独立的自动化账号 token。
 
-创建缺失的 `cilium/vX.Y` 维护分支时，workflow 会优先使用
-`AUTOMATION_GITHUB_TOKEN`，未设置时依次回退到 `COPILOT_GITHUB_TOKEN` 和默认
-`GITHUB_TOKEN`。创建或更新 PR 时优先使用 `AUTOMATION_GITHUB_TOKEN`；为了兼容旧配置，
-未设置时会回退到 `COPILOT_GITHUB_TOKEN`。workflow 默认的 `GITHUB_TOKEN` 绝不会用作
-Copilot 凭据或 PR 创建 token。使用默认 token 创建的 pull request 不会触发新的
-`pull_request` 事件，因此 `.github/workflows/pr.yaml` 不会启动 e2e 任务。
-`AUTOMATION_GITHUB_TOKEN` 会让 PR 创建表现得像普通用户操作，并自动触发这些测试。
+创建缺失的 `cilium/vX.Y` 维护分支时，workflow 使用当前 job 的 `GITHUB_TOKEN`
+推送新分支。升级 PR 也由 `peter-evans/create-pull-request` 使用 `GITHUB_TOKEN`
+创建，目标分支是对应的 `cilium/vX.Y`。manifest PR 会先校验
+`AUTOMATION_GITHUB_TOKEN || COPILOT_GITHUB_TOKEN` 是否能访问仓库，并用它配置
+manifest 自动化分支的 push remote；PR 创建动作本身仍使用 `GITHUB_TOKEN`。
+
+注意：使用默认 `GITHUB_TOKEN` 创建的 pull request 通常不会触发新的
+`pull_request` 事件，因此 `.github/workflows/pr.yaml` 可能不会自动启动 e2e 任务。
+如果需要像普通用户操作一样触发后续 workflow，应改造 PR 创建步骤使用
+`AUTOMATION_GITHUB_TOKEN` 作为 create-pull-request 的 token。
 
 可选的仓库 variables：
 
 - `AI_MODEL`：传给每次 CLI 尝试的模型名称。省略时，Copilot 使用自己的默认值，
-  DeepSeek 使用 `deepseek/deepseek-v4-pro`。
+  DeepSeek 使用 `deepseek/deepseek-v4-flash`。
 - `DEEPSEEK_MODEL`：只覆盖 DeepSeek 的 opencode 模型名称，例如
-  `deepseek/deepseek-v4-pro`。
+  `deepseek/deepseek-v4-flash`。
+- `COPILOT_MODEL`：只覆盖 Copilot CLI 的模型名称。
+
+可选的运行时环境变量：
+
+- `AI_AGENT_TIMEOUT`：每次 AI CLI 尝试的最大运行时间，默认 `15m`，使用 GNU
+  `timeout` 的 duration 语法。
+- `AI_AGENT_MAX_ATTEMPTS`：每个 AI CLI 的最大尝试次数，默认 `3`；设为 `1` 可关闭重试。
+- `CILIUM_UPGRADE_SKIP_VALIDATION=true`：本地调试时跳过 `make prepare` 和
+  `make ci-validate`。workflow 不设置该变量，因此默认会执行验证。
 
 实现提示词维护在 `cilium/tools/prompts/cilium-upgrade.md`。workflow 将生成的变更
 限制在部署代码、测试和项目文档内；GitHub Actions 变更必须由人工审查并提交。
