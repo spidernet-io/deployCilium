@@ -219,6 +219,8 @@ certgen:
 
 clustermesh:
   useAPIServer: true
+  config:
+    enabled: true
   enableEndpointSliceSynchronization: true
   enableMCSAPISupport: false
   apiserver:
@@ -250,4 +252,3 @@ operator:
 #           - matchExpressions:
 #             - key: node-role.kubernetes.io/control-plane
 #               operator: Exists
-
