@@ -24,12 +24,12 @@ jobs:
         id: command
         uses: actions/github-script@v7
         env:
-          HAS_COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN != '' }}
+          HAS_PR_TOKEN: ${{ secrets.PR_TOKEN != '' }}
         with:
           github-token: ${{ github.token }}
           script: |
             const body = context.payload.comment.body.trim();
-            const match = body.match(/^\/cherry-pick\s+(cilium\/v[0-9]+\.[0-9]+)\s*$/);
+            const match = body.match(/^\/cherry-pick\s+(cilium\/release-v[0-9]+\.[0-9]+)\s*$/);
             if (!match) {
               core.info('Comment is not a cherry-pick command; skipping.');
               core.setOutput('run', 'false');
@@ -41,12 +41,12 @@ jobs:
             const actor = context.payload.comment.user.login;
             const targetBranch = match[1];
 
-            if (process.env.HAS_COPILOT_GITHUB_TOKEN !== 'true') {
+            if (process.env.HAS_PR_TOKEN !== 'true') {
               await github.rest.issues.createComment({
                 owner,
                 repo,
                 issue_number: issueNumber,
-                body: 'Cannot run `/cherry-pick`: repository secret `COPILOT_GITHUB_TOKEN` is required to create a PR that triggers validation workflows.'
+                body: 'Cannot run `/cherry-pick`: repository secret `PR_TOKEN` is required to create a PR that triggers validation workflows.'
               });
               core.setOutput('run', 'false');
               return;
@@ -184,7 +184,7 @@ jobs:
       - name: Push cherry-pick branch
         if: steps.command.outputs.run == 'true' && steps.cherry-pick.outputs.has_changes == 'true'
         env:
-          PUSH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          PUSH_TOKEN: ${{ secrets.PR_TOKEN }}
           CHERRY_PICK_BRANCH: ${{ steps.cherry-pick.outputs.branch }}
         run: |
           set -euo pipefail
@@ -205,7 +205,7 @@ jobs:
           PR_NUMBER: ${{ steps.command.outputs.pr_number }}
           COMMENT_URL: ${{ github.event.comment.html_url }}
         with:
-          github-token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          github-token: ${{ secrets.PR_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
             const branch = process.env.CHERRY_PICK_BRANCH;
