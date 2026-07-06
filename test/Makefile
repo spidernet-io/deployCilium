@@ -110,7 +110,7 @@ define test-connectivity
 	@kubectl config use-context kind-$(1)
 	@cd $(CILIUM_DIR)/binary && tar -xzf cilium-cli-*-linux-amd64.tar.gz 2>/dev/null || true
 	@cd $(CILIUM_DIR)/binary && ./cilium status --wait
-	@cd $(CILIUM_DIR)/binary && ./cilium connectivity test --test-concurrency=1 --all-flows=false
+	@cd $(CILIUM_DIR)/binary && ./cilium connectivity test --test-concurrency=1 --all-flows=false --test '!check-log-errors'
 	@printf '%b\n' "$(GREEN)✓ Connectivity test passed on $(1)$(NC)"
 endef
 

@@ -173,7 +173,7 @@ hubble:
 
   # hubble.tls :  for mTLS between Hubble server and Hubble Relay
   tls:
-    enabled: false
+    enabled: true
     auto:
       enabled: true
       method: cronJob

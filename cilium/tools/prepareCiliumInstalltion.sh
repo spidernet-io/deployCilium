@@ -41,7 +41,7 @@ download_with_retry() {
 
   for ((i=1; i<=retries; i++)); do
     echo "Downloading ${url} (attempt ${i})..."
-    curl -sSL "${url}" -o "${output_path}"
+    curl --fail --silent --show-error --location "${url}" -o "${output_path}"
     if [ $? -eq 0 ]; then
       return 0
     fi

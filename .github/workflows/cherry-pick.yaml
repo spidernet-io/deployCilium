@@ -1,0 +1,288 @@
+name: Cherry-pick PR
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  cherry-pick:
+    name: Cherry-pick PR to maintenance branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event.issue.pull_request != null
+    concurrency:
+      group: cherry-pick-pr-${{ github.event.issue.number }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Parse command
+        id: command
+        uses: actions/github-script@v7
+        env:
+          HAS_COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN != '' }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const body = context.payload.comment.body.trim();
+            const match = body.match(/^\/cherry-pick\s+(cilium\/v[0-9]+\.[0-9]+)\s*$/);
+            if (!match) {
+              core.info('Comment is not a cherry-pick command; skipping.');
+              core.setOutput('run', 'false');
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const issueNumber = context.payload.issue.number;
+            const actor = context.payload.comment.user.login;
+            const targetBranch = match[1];
+
+            if (process.env.HAS_COPILOT_GITHUB_TOKEN !== 'true') {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: 'Cannot run `/cherry-pick`: repository secret `COPILOT_GITHUB_TOKEN` is required to create a PR that triggers validation workflows.'
+              });
+              core.setOutput('run', 'false');
+              return;
+            }
+
+            const permissionResponse = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: actor
+            });
+            const permission = permissionResponse.data.permission;
+            const allowed = ['admin', 'maintain', 'write'].includes(permission);
+            if (!allowed) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: `Cannot run \`/cherry-pick\`: @${actor} has \`${permission}\` permission, but \`write\` or higher is required.`
+              });
+              core.setOutput('run', 'false');
+              return;
+            }
+
+            let branchExists = true;
+            try {
+              await github.rest.repos.getBranch({
+                owner,
+                repo,
+                branch: targetBranch
+              });
+            } catch (error) {
+              if (error.status === 404) {
+                branchExists = false;
+              } else {
+                throw error;
+              }
+            }
+            if (!branchExists) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: `Cannot cherry-pick: target branch \`${targetBranch}\` does not exist.`
+              });
+              core.setOutput('run', 'false');
+              return;
+            }
+
+            const pr = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: issueNumber
+            });
+
+            const sourceBranch = pr.data.head.label;
+            const sourceTitle = pr.data.title;
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner,
+              repo,
+              pull_number: issueNumber,
+              per_page: 100
+            });
+
+            core.setOutput('run', 'true');
+            core.setOutput('pr_number', String(issueNumber));
+            core.setOutput('target_branch', targetBranch);
+            core.setOutput('source_branch', sourceBranch);
+            core.setOutput('source_title', sourceTitle);
+            core.setOutput('commits_json', JSON.stringify(commits.map((commit) => commit.sha)));
+
+      - name: Check out target branch
+        if: steps.command.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+          ref: ${{ steps.command.outputs.target_branch }}
+          fetch-depth: 0
+
+      - name: Cherry-pick pull request commits
+        if: steps.command.outputs.run == 'true'
+        id: cherry-pick
+        env:
+          PR_NUMBER: ${{ steps.command.outputs.pr_number }}
+          TARGET_BRANCH: ${{ steps.command.outputs.target_branch }}
+          COMMITS_JSON: ${{ steps.command.outputs.commits_json }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          safe_target="${TARGET_BRANCH//\//-}"
+          cherry_pick_branch="cherry-pick/pr-${PR_NUMBER}-to-${safe_target}"
+
+          git fetch origin \
+            "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr/${PR_NUMBER}"
+
+          git checkout -B "${cherry_pick_branch}" "origin/${TARGET_BRANCH}"
+
+          mapfile -t commits < <(jq -r '.[]' <<< "${COMMITS_JSON}")
+          if [[ ${#commits[@]} -eq 0 ]]; then
+            echo "Pull request #${PR_NUMBER} has no commits to cherry-pick." >&2
+            exit 1
+          fi
+
+          for commit in "${commits[@]}"; do
+            if git cherry-pick -x "${commit}"; then
+              continue
+            fi
+
+            if git diff --quiet && git diff --cached --quiet; then
+              git cherry-pick --skip
+              continue
+            fi
+
+            exit 1
+          done
+
+          if [[ $(git rev-list --count "origin/${TARGET_BRANCH}..HEAD") -eq 0 ]]; then
+            {
+              echo "branch=${cherry_pick_branch}"
+              echo "commit_count=${#commits[@]}"
+              echo "has_changes=false"
+            } >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          {
+            echo "branch=${cherry_pick_branch}"
+            echo "commit_count=${#commits[@]}"
+            echo "has_changes=true"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Push cherry-pick branch
+        if: steps.command.outputs.run == 'true' && steps.cherry-pick.outputs.has_changes == 'true'
+        env:
+          PUSH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          CHERRY_PICK_BRANCH: ${{ steps.cherry-pick.outputs.branch }}
+        run: |
+          set -euo pipefail
+
+          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease origin "${CHERRY_PICK_BRANCH}"
+
+      - name: Create cherry-pick pull request
+        if: steps.command.outputs.run == 'true' && steps.cherry-pick.outputs.has_changes == 'true'
+        id: cpr
+        uses: actions/github-script@v7
+        env:
+          CHERRY_PICK_BRANCH: ${{ steps.cherry-pick.outputs.branch }}
+          COMMIT_COUNT: ${{ steps.cherry-pick.outputs.commit_count }}
+          SOURCE_BRANCH: ${{ steps.command.outputs.source_branch }}
+          SOURCE_TITLE: ${{ steps.command.outputs.source_title }}
+          TARGET_BRANCH: ${{ steps.command.outputs.target_branch }}
+          PR_NUMBER: ${{ steps.command.outputs.pr_number }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+        with:
+          github-token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const branch = process.env.CHERRY_PICK_BRANCH;
+            const base = process.env.TARGET_BRANCH;
+            const prNumber = process.env.PR_NUMBER;
+            const head = `${owner}:${branch}`;
+            const title = `cherry-pick: PR #${prNumber} to ${base}`;
+            const body = `Cherry-picks #${prNumber} to \`${base}\`.
+
+            Source PR: #${prNumber}
+            Source branch: \`${process.env.SOURCE_BRANCH}\`
+            Source title: ${process.env.SOURCE_TITLE}
+            Commit count: ${process.env.COMMIT_COUNT}
+
+            Triggered by: ${process.env.COMMENT_URL}
+            `;
+
+            const existing = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              head,
+              base
+            });
+            if (existing.data.length > 0) {
+              core.setOutput('pull-request-url', existing.data[0].html_url);
+              return;
+            }
+
+            const created = await github.rest.pulls.create({
+              owner,
+              repo,
+              head: branch,
+              base,
+              title,
+              body
+            });
+            core.setOutput('pull-request-url', created.data.html_url);
+
+      - name: Report cherry-pick pull request
+        if: steps.command.outputs.run == 'true' && steps.cpr.outputs.pull-request-url
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: Number('${{ steps.command.outputs.pr_number }}'),
+              body: `Cherry-pick PR created for \`${{ steps.command.outputs.target_branch }}\`: ${{ steps.cpr.outputs.pull-request-url }}`
+            });
+
+      - name: Report skipped cherry-pick
+        if: steps.command.outputs.run == 'true' && steps.cherry-pick.outputs.has_changes != 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: Number('${{ steps.command.outputs.pr_number }}'),
+              body: `No cherry-pick PR was created for \`${{ steps.command.outputs.target_branch }}\`. The target branch may already contain these changes.`
+            });
+
+      - name: Report cherry-pick failure
+        if: failure() && steps.command.outputs.run == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: Number('${{ steps.command.outputs.pr_number }}'),
+              body: `Cherry-pick to \`${{ steps.command.outputs.target_branch }}\` failed. Check the workflow run for conflicts or permission errors: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`
+            });
