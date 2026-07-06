@@ -108,9 +108,9 @@ endef
 define test-connectivity
 	@printf '%b\n' "$(BLUE)Testing connectivity on $(1)...$(NC)"
 	@kubectl config use-context kind-$(1)
-	@cd $(CILIUM_BINARY_DIR) && tar -xzf cilium-cli-*-linux-amd64.tar.gz 2>/dev/null || true
-	@cd $(CILIUM_BINARY_DIR) && ./cilium status --wait
-	@cd $(CILIUM_BINARY_DIR) && ./cilium connectivity test --test-concurrency=1 --all-flows=false --test '!check-log-errors'
+	@cd $(CILIUM_DIR)/binary && tar -xzf cilium-cli-*-linux-amd64.tar.gz 2>/dev/null || true
+	@cd $(CILIUM_DIR)/binary && ./cilium status --wait
+	@cd $(CILIUM_DIR)/binary && ./cilium connectivity test --test-concurrency=1 --all-flows=false --test '!check-log-errors'
 	@printf '%b\n' "$(GREEN)✓ Connectivity test passed on $(1)$(NC)"
 endef
 

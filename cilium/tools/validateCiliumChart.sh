@@ -10,7 +10,7 @@ PROJECT_ROOT=$(dirname "$(dirname "${SCRIPT_DIR}")")
 CILIUM_ROOT="${PROJECT_ROOT}/cilium"
 
 # Source versions
-source "${CILIUM_ROOT}/env.sh"
+source "${CILIUM_ROOT}/version.sh"
 
 # Colors for output
 RED='\033[0;31m'
@@ -39,8 +39,8 @@ if ! command -v helm &> /dev/null; then
 fi
 
 # Define paths
-CHART_PATH="${CILIUM_CHART_DIR}/cilium-${CILIUM_VERSION}.tgz"
-PROJECT_VALUES="${CILIUM_VALUES_FILE}"
+CHART_PATH="${CILIUM_ROOT}/chart/cilium-${CILIUM_VERSION}.tgz"
+PROJECT_VALUES="${CILIUM_ROOT}/values.yaml"
 TEMP_DIR=$(mktemp -d)
 
 trap "rm -rf ${TEMP_DIR}" EXIT

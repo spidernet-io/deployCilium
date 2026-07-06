@@ -14,24 +14,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  discover-supported-minors:
-    name: Discover supported minors
+  prepare-branches:
+    name: Prepare maintenance branches
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      minors: ${{ steps.discover.outputs.minors }}
+      branches: ${{ steps.discover.outputs.branches }}
       manifest: ${{ steps.discover.outputs.manifest }}
 
     steps:
-      - name: Check out main
+      - name: Check out updater branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Read supported minors
+      - name: Read supported minors and create branches
         id: discover
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -88,10 +89,53 @@ jobs:
 
           echo "Configured Cilium minors: $(printf '%s ' "${supported_minors[@]}")"
 
+          mapfile -t branches < <(
+            git ls-remote --heads origin 'cilium/release-v*' |
+              sed 's#.*refs/heads/##' |
+              sort -V
+          )
+          if [[ ${#branches[@]} -gt 0 ]]; then
+            echo "Existing maintenance branches: $(printf '%s ' "${branches[@]}")"
+          else
+            echo "Existing maintenance branches: none"
+          fi
+
+          branch_exists() {
+            local wanted="$1"
+            local branch
+            for branch in "${branches[@]}"; do
+              if [[ "${branch}" == "${wanted}" ]]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          source_branch="${GITHUB_REF_NAME}"
           matrix_file=$(mktemp)
           : > "${matrix_file}"
 
           for minor in "${supported_minors[@]}"; do
+            new_branch="cilium/release-v${minor}"
+            if branch_exists "${new_branch}"; then
+              source_branch="${new_branch}"
+            else
+              branch_push_token="${COPILOT_GITHUB_TOKEN:-${GITHUB_TOKEN}}"
+              if [[ -z "${branch_push_token}" ]]; then
+                echo "Missing token; required to create ${new_branch} from ${source_branch}." >&2
+                exit 1
+              fi
+
+              echo "Creating ${new_branch} from ${source_branch}."
+              git fetch origin "+refs/heads/${source_branch}:refs/remotes/origin/${source_branch}"
+              git push \
+                "https://x-access-token:${branch_push_token}@github.com/${GITHUB_REPOSITORY}.git" \
+                "refs/remotes/origin/${source_branch}:refs/heads/${new_branch}"
+
+              branches+=("${new_branch}")
+              source_branch="${new_branch}"
+            fi
+
             latest_version=$(
               printf '%s\n' "${stable_versions[@]}" |
                 awk -F. -v minor="${minor}" '$1 "." $2 == minor { print }' |
@@ -104,36 +148,36 @@ jobs:
             fi
 
             jq -n \
-              --arg cilium_minor "v${minor}" \
+              --arg branch "${new_branch}" \
               --arg target_minor "${minor}" \
               --arg latest_version "${latest_version}" \
-              '{cilium_minor: $cilium_minor, target_minor: $target_minor, latest_version: $latest_version}' \
+              '{branch: $branch, target_minor: $target_minor, latest_version: $latest_version}' \
               >> "${matrix_file}"
           done
 
-          minors_json=$(
+          branches_json=$(
             jq -s -c 'sort_by(.target_minor | split(".") | map(tonumber))' "${matrix_file}"
           )
           manifest_json=$(
-            jq -n -c --argjson minors "${minors_json}" \
+            jq -n -c --argjson branches "${branches_json}" \
               --arg checked_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              '{checked_at: $checked_at, supported: $minors}'
+              '{checked_at: $checked_at, supported: $branches}'
           )
 
-          echo "Discovered minors: ${minors_json}"
-          echo "minors=${minors_json}" >> "${GITHUB_OUTPUT}"
+          echo "Discovered branches: ${branches_json}"
+          echo "branches=${branches_json}" >> "${GITHUB_OUTPUT}"
           echo "manifest=${manifest_json}" >> "${GITHUB_OUTPUT}"
 
   upgrade:
     name: Check and propose upgrade
-    needs: discover-supported-minors
-    if: needs.discover-supported-minors.outputs.minors != '[]'
+    needs: prepare-branches
+    if: needs.prepare-branches.outputs.branches != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.discover-supported-minors.outputs.minors) }}
+        include: ${{ fromJson(needs.prepare-branches.outputs.branches) }}
 
     steps:
       - name: Check out updater scripts
@@ -142,21 +186,19 @@ jobs:
           path: updater
           fetch-depth: 0
 
-      - name: Check out main worktree
+      - name: Check out maintenance branch
         uses: actions/checkout@v4
         with:
           token: ${{ github.token }}
-          ref: main
+          ref: ${{ matrix.branch }}
           path: worktree
           fetch-depth: 0
 
       - name: Read current Cilium version
         id: current
         working-directory: worktree
-        env:
-          CILIUM_MINOR: ${{ matrix.cilium_minor }}
         run: |
-          source cilium/env.sh
+          source cilium/version.sh
           echo "version=${CILIUM_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Install AI CLIs and validation tools
@@ -204,7 +246,6 @@ jobs:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
-          CILIUM_MINOR: ${{ matrix.cilium_minor }}
           CILIUM_TARGET_MINOR: ${{ matrix.target_minor }}
           CILIUM_PROJECT_ROOT: ${{ github.workspace }}/worktree
           CILIUM_UPDATER_ROOT: ${{ github.workspace }}/updater
@@ -253,7 +294,7 @@ jobs:
         with:
           token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           path: worktree
-          base: main
+          base: ${{ matrix.branch }}
           branch: automation/cilium-v${{ matrix.target_minor }}-latest
           delete-branch: true
           commit-message: |
@@ -274,7 +315,7 @@ jobs:
   update-version-manifest:
     name: Update version manifest
     needs:
-      - discover-supported-minors
+      - prepare-branches
       - upgrade
     if: needs.upgrade.result == 'success'
     runs-on: ubuntu-latest
@@ -289,7 +330,7 @@ jobs:
 
       - name: Update supported Cilium versions file
         env:
-          MANIFEST_JSON: ${{ needs.discover-supported-minors.outputs.manifest }}
+          MANIFEST_JSON: ${{ needs.prepare-branches.outputs.manifest }}
         run: |
           set -euo pipefail
 

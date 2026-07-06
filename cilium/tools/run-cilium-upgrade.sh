@@ -8,14 +8,12 @@ updater_root=$(cd "${CILIUM_UPDATER_ROOT:-${script_project_root}}" && pwd)
 release_script="${updater_root}/cilium/tools/check-cilium-release.sh"
 context_file="${project_root}/cilium/tools/cilium-upgrade-context.md"
 prompt_file="${updater_root}/cilium/tools/prompts/cilium-upgrade.md"
-CILIUM_ROOT="${project_root}/cilium"
-source "${CILIUM_ROOT}/env.sh"
-version_file="${CILIUM_VERSION_FILE}"
+version_file="${project_root}/cilium/version.sh"
 pr_body_file=${CILIUM_UPGRADE_PR_BODY:-"/tmp/cilium-upgrade-pr.md"}
 check_only=false
 
 # Current Cilium version: prefer the value supplied by the workflow (which
-# sources the selected version.sh). Fall back to reading version.sh directly so
+# sources cilium/version.sh). Fall back to reading version.sh directly so
 # the script remains usable for local manual runs.
 if [[ -z "${CURRENT_CILIUM_VERSION:-}" ]]; then
     CURRENT_CILIUM_VERSION=$(
@@ -35,10 +33,10 @@ The script tries each AI CLI in priority order until one succeeds:
 Environment:
   CURRENT_CILIUM_VERSION   Current pinned Cilium version (x.y.z). When set,
                            it is forwarded to check-cilium-release.sh. When
-                           unset, the script reads the selected version.sh itself.
-  CILIUM_MINOR              Target Cilium minor path under cilium/versions.
-                            Defaults to v1.19. Accepts v1.18 or 1.18.
-  CILIUM_TARGET_MINOR       Deprecated alias for CILIUM_MINOR.
+                           unset, the script reads cilium/version.sh itself.
+  CILIUM_TARGET_MINOR       Target Cilium minor (x.y). Defaults to the current
+                            version's minor. Maintenance branches should set
+                            this from their branch name, e.g. cilium/release-v1.18.
   COPILOT_GITHUB_TOKEN      Copilot credential (fine-grained PAT with
                             "Copilot Requests" permission).
   COPILOT_MODEL             Optional model name passed to copilot.
@@ -353,7 +351,7 @@ validate_upgrade() {
     local actual_version
     actual_version=$(
         sed -n 's/^[[:space:]]*CILIUM_VERSION=${CILIUM_VERSION:-"\([^"]*\)"}.*/\1/p' \
-            "${version_file}"
+            cilium/version.sh
     )
     if [[ "${actual_version}" != "${latest_version}" ]]; then
         echo "${agent} did not pin Cilium ${latest_version}; found ${actual_version}." >&2
@@ -363,7 +361,7 @@ validate_upgrade() {
     local actual_hubble_version
     actual_hubble_version=$(
         sed -n 's/^[[:space:]]*HUBBLE_CLI_VERSION=${HUBBLE_CLI_VERSION:-"\([^"]*\)"}.*/\1/p' \
-            "${version_file}" |
+            cilium/version.sh |
             sed 's/^v//'
     )
     if [[ "${actual_hubble_version}" != "${latest_hubble_version}" ]]; then
