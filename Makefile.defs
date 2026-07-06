@@ -5,6 +5,12 @@
 # ============================================================================
 ROOT_DIR := $(realpath $(dir $(filter %Makefile.defs,$(MAKEFILE_LIST))))
 CILIUM_DIR := $(ROOT_DIR)/cilium
+CILIUM_MINOR ?= v1.19
+ifeq ($(filter v%,$(CILIUM_MINOR)),)
+override CILIUM_MINOR := v$(CILIUM_MINOR)
+endif
+CILIUM_VERSION_DIR := $(CILIUM_DIR)/versions/$(CILIUM_MINOR)
+CILIUM_BINARY_DIR := $(CILIUM_VERSION_DIR)/binary
 TEST_DIR := $(ROOT_DIR)/test
 
 # ============================================================================
@@ -57,6 +63,9 @@ NC := \033[0m
 # ============================================================================
 export ROOT_DIR
 export CILIUM_DIR
+export CILIUM_MINOR
+export CILIUM_VERSION_DIR
+export CILIUM_BINARY_DIR
 export TEST_DIR
 export KIND_VERSION
 export KUBECTL_VERSION

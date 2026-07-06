@@ -8,14 +8,11 @@ set -o pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 PROJECT_ROOT=$(dirname "$(dirname "${SCRIPT_DIR}")")
 
-# Source versions
-source "${PROJECT_ROOT}/cilium/version.sh"
-
 # Define output directories
 CILIUM_ROOT="${PROJECT_ROOT}/cilium"
-GATEWAY_API_DIR="${CILIUM_ROOT}/gateway-api"
-CILIUM_CHART_DIR="${CILIUM_ROOT}/chart"
-CILIUM_CLI_DIR="${CILIUM_ROOT}/binary"
+source "${CILIUM_ROOT}/env.sh"
+GATEWAY_API_DIR="${CILIUM_GATEWAY_API_DIR}"
+CILIUM_CLI_DIR="${CILIUM_BINARY_DIR}"
 
 # Clean old files
 echo "Cleaning old files..."

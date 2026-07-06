@@ -7,13 +7,15 @@ project_root=$(cd "${CILIUM_PROJECT_ROOT:-${script_project_root}}" && pwd)
 context_file="${project_root}/cilium/tools/cilium-upgrade-context.md"
 cilium_api_url="https://api.github.com/repos/cilium/cilium/releases?per_page=100"
 hubble_api_url="https://api.github.com/repos/cilium/hubble/releases?per_page=100"
-version_file="${project_root}/cilium/version.sh"
+CILIUM_ROOT="${project_root}/cilium"
+source "${CILIUM_ROOT}/env.sh"
+version_file="${CILIUM_VERSION_FILE}"
 
 # The current Cilium version is provided by the caller (the workflow sources
-# cilium/version.sh and exports CURRENT_CILIUM_VERSION). This keeps the
+# cilium/versions/<minor>/version.sh and exports CURRENT_CILIUM_VERSION). This keeps the
 # script a pure function of its inputs and avoids re-reading version.sh.
-current_version="${CURRENT_CILIUM_VERSION:-}"
-current_hubble_version="${CURRENT_HUBBLE_CLI_VERSION:-}"
+current_version="${CURRENT_CILIUM_VERSION:-${CILIUM_VERSION:-}}"
+current_hubble_version="${CURRENT_HUBBLE_CLI_VERSION:-${HUBBLE_CLI_VERSION:-}}"
 target_minor="${CILIUM_TARGET_MINOR:-}"
 
 if [[ ! "${current_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -115,8 +117,8 @@ if [[ ${#stable_hubble_versions[@]} -eq 0 ]]; then
     exit 1
 fi
 
-# Each maintenance branch owns exactly one Cilium minor series. Select the
-# newest stable patch in that target minor and never cross into another minor.
+# Each version directory owns exactly one Cilium minor series. Select the newest
+# stable patch in that target minor and never cross into another minor.
 target_minor_versions=()
 for v in "${stable_versions[@]}"; do
     if [[ "$(printf '%s' "${v}" | cut -d. -f1-2)" == "${target_minor}" ]]; then

@@ -71,7 +71,7 @@ DAOCLOUD_IMAGE_REPO=${DAOCLOUD_IMAGE_REPO:-"true"}
 # 保留为废弃别名，用于向后兼容。
 OFFLINE_REGISTRY=${OFFLINE_REGISTRY:-"${OFFLINE_GLOBAL_REGISTRY:-""}"}
 
-source ${CURRENT_DIR_PATH}/version.sh
+source "${CURRENT_DIR_PATH}/env.sh"
 
 if [ "${DAOCLOUD_IMAGE_REPO}" == "true" ]; then
     QUAY_IMAGE_REPO="quay.m.daocloud.io"
@@ -95,7 +95,7 @@ fi
 #===================== 配置
 
 
-CHART_PATH="${CURRENT_DIR_PATH}/chart/cilium-${CILIUM_VERSION}.tgz"
+CHART_PATH="${CILIUM_CHART_DIR}/cilium-${CILIUM_VERSION}.tgz"
 [ -f "${CHART_PATH}" ] || { echo "错误，未找到 ${CHART_PATH}" ; exit 1 ; }
 echo "使用本地 chart ${CHART_PATH}" >&2
 
@@ -126,6 +126,8 @@ ENABLE_gatewayAPI=${ENABLE_gatewayAPI:-"true"}
 ENABLE_INTEGRATE_ISTIO=${ENABLE_INTEGRATE_ISTIO:-"false"}
 
 
+echo "CILIUM_MINOR=${CILIUM_MINOR}" >&2
+echo "CILIUM_VERSION_DIR=${CILIUM_VERSION_DIR}" >&2
 echo "INSTANCE_NAME=${INSTANCE_NAME}" >&2
 echo "NAMESPACE=${NAMESPACE}" >&2
 echo "POD_v4CIDR=${POD_v4CIDR}" >&2
@@ -163,7 +165,7 @@ fi
 #===================  安装 CLI
 
 if [ "${HELM_DRY_RUN}" != "true" ] && [ "${PRINT_IMAGES}" != "true" ] && [ "${PREPULL_IMAGES}" != "true" ]; then
-    cp  ${CURRENT_DIR_PATH}/binary/hubble-cli-${HUBBLE_CLI_VERSION}-linux-amd64.tar.gz /tmp/hubble-cli-linux-amd64.tar.gz
+    cp  "${CILIUM_BINARY_DIR}/hubble-cli-${HUBBLE_CLI_VERSION}-linux-amd64.tar.gz" /tmp/hubble-cli-linux-amd64.tar.gz
     (
         cd /tmp
         tar xzvf hubble-cli-linux-amd64.tar.gz
@@ -171,7 +173,7 @@ if [ "${HELM_DRY_RUN}" != "true" ] && [ "${PRINT_IMAGES}" != "true" ] && [ "${PR
         sudo cp hubble /usr/sbin/
     )
 
-    cp ${CURRENT_DIR_PATH}/binary/cilium-cli-${CILIUM_CLI_VERSION}-linux-amd64.tar.gz /tmp/cilium-cli-linux-amd64.tar.gz
+    cp "${CILIUM_BINARY_DIR}/cilium-cli-${CILIUM_CLI_VERSION}-linux-amd64.tar.gz" /tmp/cilium-cli-linux-amd64.tar.gz
     (
         cd /tmp
         tar xzvf cilium-cli-linux-amd64.tar.gz
@@ -186,7 +188,7 @@ fi
 if [ "${HELM_DRY_RUN}" != "true" ] && [ "${PRINT_IMAGES}" != "true" ] && [ "${PREPULL_IMAGES}" != "true" ] && \
     [ "$ENABLE_gatewayAPI" == "true" ] && ( ! kubectl get gatewayclasses &>/dev/null ) ;then
     echo "从远端应用 Gateway API"
-    kubectl apply -f "${CURRENT_DIR_PATH}/gateway-api/*"
+    kubectl apply -f "${CILIUM_GATEWAY_API_DIR}"/*.yaml
 fi
 
 
@@ -257,7 +259,7 @@ fi
 HELM_COMMON_OPTIONS="\
   --version ${CILIUM_VERSION} \
   --namespace ${NAMESPACE} \
-  -f ${CURRENT_DIR_PATH}/values.yaml \
+  -f ${CILIUM_VALUES_FILE} \
   ${HELM_OPTIONS} \
   ${EXTRA_HELM_OPTIONS:-}"
 

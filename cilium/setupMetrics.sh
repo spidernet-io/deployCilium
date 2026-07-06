@@ -18,7 +18,7 @@ NAMESPACE=${NAMESPACE:-"kube-system"}
 # grafana 默认只导入 其租户下的 面板， 否则，会看不到 grafana 中的面板
 GRAFANA_NAMESPACE=${GRAFANA_NAMESPACE:-"prometheus"}
 
-source ${CURRENT_DIR_PATH}/version.sh
+source "${CURRENT_DIR_PATH}/env.sh"
 
 CHART_HTTP_PROXY=${CHART_HTTP_PROXY:-""}
 if [ -n "$CHART_HTTP_PROXY" ] ; then
@@ -31,8 +31,8 @@ export CHART_HTTP_PROXY=${CHART_HTTP_PROXY}
 
 
 CHART_PATH="cilium/cilium"
-if [ -f "${CURRENT_DIR_PATH}/chart/cilium-${CILIUM_VERSION}.tgz" ] ; then
-    CHART_PATH="${CURRENT_DIR_PATH}/chart/cilium-${CILIUM_VERSION}.tgz"
+if [ -f "${CILIUM_CHART_DIR}/cilium-${CILIUM_VERSION}.tgz" ] ; then
+    CHART_PATH="${CILIUM_CHART_DIR}/cilium-${CILIUM_VERSION}.tgz"
     echo "use local chart ${CHART_PATH}"
 else 
     CHART_REPO="https://helm.cilium.io"
@@ -114,5 +114,4 @@ helm upgrade ${INSTANCE_NAME} ${CHART_PATH} \
   -n ${NAMESPACE} \
   --reuse-values \
   -f /tmp/cilium-metrics.yaml
-
 

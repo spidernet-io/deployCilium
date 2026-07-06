@@ -2,37 +2,37 @@
 
 ## 选择 Cilium 版本
 
-本仓库按 Cilium 的 `x.y` 版本维护安装分支，每个分支只保留该 `x.y`
-系列的最新 `z` 版本。例如：
+本仓库只在 `main` 分支维护安装脚本，并在 `cilium/versions/` 下按 Cilium
+的 `x.y` 版本维护安装资产。每个目录只保留该 `x.y` 系列的最新 `z` 版本。例如：
 
-- `cilium/v1.18`：保留最新的 Cilium `1.18.x`
-- `cilium/v1.19`：保留最新的 Cilium `1.19.x`
+- `cilium/versions/v1.18`：保留最新的 Cilium `1.18.x`
+- `cilium/versions/v1.19`：保留最新的 Cilium `1.19.x`
 
-如果需要安装特定的 Cilium `x.y` 系列，请直接 clone 对应分支。比如安装
-最新的 Cilium `1.18.x`：
+如果需要安装特定的 Cilium `x.y` 系列，请 clone `main` 分支，并用
+`CILIUM_MINOR` 选择版本。比如安装最新的 Cilium `1.18.x`：
 
 ```bash
-git clone -b cilium/v1.18 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.18
-cd deployCilium-v1.18/cilium
+git clone https://github.com/spidernet-io/deployCilium.git
+cd deployCilium/cilium
+export CILIUM_MINOR="v1.18"
 ```
 
-如果需要安装 Cilium `1.19.x`，把分支名替换为 `cilium/v1.19`：
+如果需要安装 Cilium `1.19.x`，把 `CILIUM_MINOR` 改为 `v1.19`：
 
 ```bash
-git clone -b cilium/v1.19 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.19
-cd deployCilium-v1.19/cilium
+export CILIUM_MINOR="v1.19"
 ```
 
-可以通过如下命令查看当前可用的 Cilium 安装分支：
+可以通过如下命令查看当前可用的 Cilium 版本目录：
 
 ```bash
-git ls-remote --heads https://github.com/spidernet-io/deployCilium.git 'cilium/v*'
+ls -1 ./versions
 ```
 
-可以通过如下命令查看当前分支实际保留的 Cilium patch 版本：
+可以通过如下命令查看当前选择版本实际保留的 Cilium patch 版本：
 
 ```bash
-source ./version.sh
+source ./env.sh
 echo "${CILIUM_VERSION}"
 ```
 
@@ -45,18 +45,20 @@ chmod +x ./setup.sh ./showStatus.sh
 ./showStatus.sh
 ```
 
-注意：`main` 分支只维护自动升级逻辑，不作为安装分支使用。安装 Cilium 时请使用
-`cilium/vX.Y` 分支。
-
 ##  工程目录
 
 ```
 cilium/
-  ├── binary/               目录下放置了对应版本的 CLI 二进制
-  ├── chart/                目录下放置了对应版本的 chart
-  ├── gateway-api/          目录下放置了 gateway api crd
+  ├── versions/
+  │   ├── v1.18/
+  │   │   ├── binary/       目录下放置了该版本的 CLI 二进制
+  │   │   ├── chart/        目录下放置了该版本的 chart
+  │   │   ├── gateway-api/  目录下放置了该版本的 gateway api crd
+  │   │   ├── values.yaml   该版本的 Helm values
+  │   │   └── version.sh    该版本的软件版本
+  │   └── v1.19/
   ├── tools/                目录下放置了工具脚本
-  ├── version.sh            软件版本，决定了 setup.sh 的执行逻辑
+  ├── env.sh                根据 CILIUM_MINOR 选择版本目录
   ├── setup.sh              安装脚本：安装 cilium 的脚本
   ├── setupClusterMesh.sh   功能开关脚本：设置多集群互联的脚本
   ├── setupMetrics.sh       功能开关脚本：开启指标的脚本
@@ -94,20 +96,21 @@ cilium/
 
 适用于集群节点可以直接访问公网镜像源的场景。脚本默认从 DaoCloud 在线镜像仓库拉取镜像。
 
-1. clone 对应的 `cilium/vX.Y` 分支到 master 节点
+1. clone `main` 分支到 master 节点并选择 Cilium 版本
 
     以安装最新的 Cilium `1.18.x` 为例：
 
     ```bash
-    git clone -b cilium/v1.18 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.18
-    cd deployCilium-v1.18/cilium
+    git clone https://github.com/spidernet-io/deployCilium.git
+    cd deployCilium/cilium
+    export CILIUM_MINOR="v1.18"
     chmod +x ./setup.sh ./showStatus.sh
     ```
 
-    如需安装其它 `x.y` 系列，把分支名替换为 `cilium/v1.19` 等。可用分支可通过如下命令查看：
+    如需安装其它 `x.y` 系列，把 `CILIUM_MINOR` 改为 `v1.19` 等。可用版本可通过如下命令查看：
 
     ```bash
-    git ls-remote --heads https://github.com/spidernet-io/deployCilium.git 'cilium/v*'
+    ls -1 ./versions
     ```
 
 2. 设置环境变量并安装
@@ -182,13 +185,14 @@ cilium/
 - 离线集群安装时使用的 `POD_v4CIDR`、`CLUSTER_NAME`、`K8S_API_IP`、`DAOCLOUD_IMAGE_REPO`、
   `EXTRA_HELM_OPTIONS` 等参数必须与准备镜像时保持一致，否则 Helm 渲染出来的镜像列表可能不一致
 
-#### 步骤 1：在准备机上 clone 对应分支并渲染镜像列表
+#### 步骤 1：在准备机上 clone main 并渲染镜像列表
 
-在准备机上 clone 对应的 `cilium/vX.Y` 分支（与离线集群实际安装时使用的分支保持一致）：
+在准备机上 clone `main` 分支，并选择与离线集群实际安装时相同的 `CILIUM_MINOR`：
 
 ```bash
-git clone -b cilium/v1.18 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.18
-cd deployCilium-v1.18/cilium
+git clone https://github.com/spidernet-io/deployCilium.git
+cd deployCilium/cilium
+export CILIUM_MINOR="v1.18"
 chmod +x ./setup.sh
 ```
 
@@ -205,6 +209,7 @@ export K8S_API_IP="10.0.1.11"
 export K8S_API_PORT="6443"
 export HUBBLE_WEBUI_NODEPORT_PORT="31000"
 export INTEGRATE_ISTIO="false"
+export CILIUM_MINOR="v1.18"
 # 如需使用上游原始镜像仓库，取消下面一行
 # export DAOCLOUD_IMAGE_REPO="false"
 PRINT_IMAGES="true" ./setup.sh > images.txt
@@ -237,6 +242,7 @@ export K8S_API_IP="10.0.1.11"
 export K8S_API_PORT="6443"
 export HUBBLE_WEBUI_NODEPORT_PORT="31000"
 export INTEGRATE_ISTIO="false"
+export CILIUM_MINOR="v1.18"
 # export DAOCLOUD_IMAGE_REPO="false"
 
 PREPULL_IMAGES="true" \
@@ -254,13 +260,14 @@ while read -r image; do
 done < images.txt
 ```
 
-#### 步骤 3：在离线集群上 clone 对应分支
+#### 步骤 3：在离线集群上 clone main
 
-在离线集群的 master 节点上 clone 同一个 `cilium/vX.Y` 分支：
+在离线集群的 master 节点上 clone `main` 分支，并选择与准备镜像时相同的 `CILIUM_MINOR`：
 
 ```bash
-git clone -b cilium/v1.18 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.18
-cd deployCilium-v1.18/cilium
+git clone https://github.com/spidernet-io/deployCilium.git
+cd deployCilium/cilium
+export CILIUM_MINOR="v1.18"
 chmod +x ./setup.sh ./showStatus.sh
 ```
 
@@ -283,6 +290,7 @@ export K8S_API_IP="10.0.1.11"
 export K8S_API_PORT="6443"
 export HUBBLE_WEBUI_NODEPORT_PORT="31000"
 export INTEGRATE_ISTIO="false"
+export CILIUM_MINOR="v1.18"
 # 与准备镜像时保持一致
 # export DAOCLOUD_IMAGE_REPO="false"
 export OFFLINE_REGISTRY="<火种镜像仓库地址>"
@@ -310,6 +318,7 @@ export POD_v6Block="64"
 ### 环境变量说明
 
 > 说明：
+> * CILIUM_MINOR 表示要使用的 Cilium minor 版本目录，例如 `v1.18` 或 `v1.19`。默认值为 `v1.19`
 > *  POD_v4CIDR 是本集群的 POD IPv4 cidr，POD_v4Block 是每个 node 分割的 pod 小子网大小。注意，如果后续步骤需要实现多集群网络互联，请确保每个集群的 POD_v4CIDR 是不重叠的
 > * ENABLE_IPV6 表示是否启用 IPv6，如果集群主机网卡没有配置 IPv6 地址，K8S集群没有开启双栈，请不开打开它
 > * CLUSTER_NAME 表示本集群的名称，CLUSTER_ID 表示本集群的 ID（取值大小1-255 ）. 注意，运行本步骤后，只是做了多集群配置初始化，并未实现与其他集群互联，因此，请确保每一个集群的 CLUSTER_NAME 和 CLUSTER_ID 参数都是唯一的，这样才能在未来实现多集群联通时。

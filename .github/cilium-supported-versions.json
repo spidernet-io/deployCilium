@@ -2,15 +2,13 @@
   "supported": [
     {
       "minor": "1.18",
-      "branch": "cilium/v1.18",
       "latest_version": "1.18.3",
       "updated_at": "2026-06-29T00:00:00Z",
       "enabled": true
     },
     {
       "minor": "1.19",
-      "branch": "cilium/v1.19",
-      "latest_version": "1.19.0",
+      "latest_version": "1.19.5",
       "updated_at": "2026-06-29T00:00:00Z",
       "enabled": true
     }
