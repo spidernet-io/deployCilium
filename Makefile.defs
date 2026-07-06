@@ -60,4 +60,3 @@ export CILIUM_DIR
 export TEST_DIR
 export KIND_VERSION
 export KUBECTL_VERSION
-```](cascade:incomplete-link)

@@ -90,7 +90,7 @@ jobs:
           echo "Configured Cilium minors: $(printf '%s ' "${supported_minors[@]}")"
 
           mapfile -t branches < <(
-            git ls-remote --heads origin 'cilium/v*' |
+            git ls-remote --heads origin 'cilium/release-v*' |
               sed 's#.*refs/heads/##' |
               sort -V
           )
@@ -116,7 +116,7 @@ jobs:
           : > "${matrix_file}"
 
           for minor in "${supported_minors[@]}"; do
-            new_branch="cilium/v${minor}"
+            new_branch="cilium/release-v${minor}"
             if branch_exists "${new_branch}"; then
               source_branch="${new_branch}"
             else

@@ -3,7 +3,7 @@ name: Validate Cilium Installation
 on:
   pull_request:
     branches:
-      - 'cilium/v*'
+      - 'cilium/release-v*'
     paths:
       - 'cilium/**'
       - 'test/**'
@@ -11,7 +11,7 @@ on:
       - 'Makefile.defs'
   push:
     branches:
-      - 'cilium/v*'
+      - 'cilium/release-v*'
 
 jobs:
   validate:

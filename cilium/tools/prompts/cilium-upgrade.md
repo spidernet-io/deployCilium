@@ -47,7 +47,9 @@
 6. 运行相关验证。至少运行 shell 语法检查，并在可行时运行仓库的 chart/config
    验证。升级脚本会在 AI 修改完成后统一运行 `make prepare` 和 `make ci-validate`；
    如果你已经运行了这些命令，也要在最终 PR 正文中记录。修复升级引起的失败。
-   完整 kind e2e 测试会在 PR 打开后自动运行。
+   完整 kind e2e 测试会在 PR 打开后自动运行。如果 PR e2e 失败，后续使用
+   `cilium/tools/prompts/cilium-upgrade-e2e-repair.md` 进行独立诊断和修复；不要在
+   本初始升级任务中等待 CI、提交、推送或创建额外 PR。
 7. 绝不要提交、推送、打开 PR、暴露密钥或修改 GitHub Actions。外围工作流负责
    这些操作。
 
