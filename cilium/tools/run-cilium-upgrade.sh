@@ -36,7 +36,7 @@ Environment:
                            unset, the script reads cilium/version.sh itself.
   CILIUM_TARGET_MINOR       Target Cilium minor (x.y). Defaults to the current
                             version's minor. Maintenance branches should set
-                            this from their branch name, e.g. cilium/v1.18.
+                            this from their branch name, e.g. cilium/release-v1.18.
   COPILOT_GITHUB_TOKEN      Copilot credential (fine-grained PAT with
                             "Copilot Requests" permission).
   COPILOT_MODEL             Optional model name passed to copilot.
@@ -45,6 +45,11 @@ Environment:
                             deepseek/deepseek-v4-flash.
   AI_MODEL                  Optional fallback model name when an agent-specific
                             model variable is unset.
+  AI_AGENT_TIMEOUT          Maximum runtime for each AI CLI attempt. Defaults
+                            to 15m. Uses GNU timeout duration syntax.
+  AI_AGENT_MAX_ATTEMPTS     Maximum number of attempts per AI CLI before
+                            falling back to the next agent. Defaults to 3.
+                            Set to 1 to disable retries.
   GITHUB_TOKEN              Optional GitHub API token for release queries.
   CILIUM_UPGRADE_PR_BODY    Optional PR body path.
   CILIUM_UPGRADE_ALLOW_DIRTY
@@ -78,7 +83,7 @@ done
 
 required_commands=(curl git jq sed sort)
 if [[ "${check_only}" != "true" ]]; then
-    required_commands+=(make)
+    required_commands+=(make timeout)
 fi
 
 for command in "${required_commands[@]}"; do
@@ -124,10 +129,12 @@ current_version=$(sed -n 's/^current_version=//p' "${release_output}")
 target_minor=$(sed -n 's/^target_minor=//p' "${release_output}")
 latest_version=$(sed -n 's/^latest_version=//p' "${release_output}")
 release_url=$(sed -n 's/^release_url=//p' "${release_output}")
+current_hubble_version=$(sed -n 's/^current_hubble_version=//p' "${release_output}")
+latest_hubble_version=$(sed -n 's/^latest_hubble_version=//p' "${release_output}")
 needs_update=$(sed -n 's/^needs_update=//p' "${release_output}")
 
 if [[ "${needs_update}" != "true" ]]; then
-    echo "Cilium ${current_version} is already the latest stable release for ${target_minor}."
+    echo "Cilium ${current_version} and Hubble CLI v${current_hubble_version} are already the latest stable releases for ${target_minor}."
     if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
         echo "changed=false" >> "${GITHUB_OUTPUT}"
     fi
@@ -135,6 +142,7 @@ if [[ "${needs_update}" != "true" ]]; then
 fi
 
 echo "Cilium ${target_minor} upgrade available: ${current_version} -> ${latest_version}"
+echo "Hubble CLI ${target_minor} target: v${current_hubble_version} -> v${latest_hubble_version}"
 echo "Release: ${release_url}"
 
 if [[ "${check_only}" == "true" ]]; then
@@ -143,6 +151,8 @@ if [[ "${check_only}" == "true" ]]; then
         {
             echo "current_version=${current_version}"
             echo "latest_version=${latest_version}"
+            echo "current_hubble_version=${current_hubble_version}"
+            echo "latest_hubble_version=${latest_hubble_version}"
             echo "release_url=${release_url}"
             echo "changed=false"
         } >> "${GITHUB_OUTPUT}"
@@ -155,6 +165,35 @@ agent_prompt="Read and follow ${prompt_file}. Read ${context_file} for the compl
 # Priority order: copilot -> deepseek.
 agent_order=(copilot deepseek)
 success_agent=""
+agent_timeout=${AI_AGENT_TIMEOUT:-15m}
+agent_max_attempts=${AI_AGENT_MAX_ATTEMPTS:-3}
+if ! [[ "${agent_max_attempts}" =~ ^[0-9]+$ ]] || [[ "${agent_max_attempts}" -lt 1 ]]; then
+    echo "AI_AGENT_MAX_ATTEMPTS must be a positive integer; got '${AI_AGENT_MAX_ATTEMPTS}'." >&2
+    exit 1
+fi
+
+# Return 0 if the agent's credential is usable for its CLI, non-zero (with a
+# message on stderr) if it should be skipped without consuming retry budget.
+# This catches known-incompatible credential shapes so a misconfigured secret
+# does not waste attempts.
+credential_usable_for() {
+    local agent="$1"
+    local credential
+    credential=$(credential_for "${agent}")
+
+    case "${agent}" in
+        copilot)
+            # Copilot CLI rejects classic GitHub PATs (ghp_); it requires an
+            # OAuth token obtained via `copilot /login`. Skip gracefully so the
+            # workflow can still rely on deepseek until the secret is fixed.
+            if [[ "${credential}" == ghp_* ]]; then
+                echo "Skipping ${agent}: COPILOT_GITHUB_TOKEN is a classic PAT (ghp_), which Copilot CLI does not support. Replace it with a Copilot OAuth token." >&2
+                return 1
+            fi
+            ;;
+    esac
+    return 0
+}
 
 # Return the credential for a given agent, or empty if none is configured.
 credential_for() {
@@ -200,6 +239,7 @@ run_single_agent() {
     case "${agent}" in
         copilot)
             COPILOT_GITHUB_TOKEN="${credential}" \
+            timeout --foreground "${agent_timeout}" \
             copilot \
                 --prompt "${agent_prompt}" \
                 --allow-all \
@@ -212,6 +252,7 @@ run_single_agent() {
             ;;
         deepseek)
             DEEPSEEK_API_KEY="${credential}" \
+            timeout --foreground "${agent_timeout}" \
             opencode run \
                 --dir "${project_root}" \
                 --dangerously-skip-permissions \
@@ -239,11 +280,7 @@ print_ai_output() {
     echo "::endgroup::" >&2
 }
 
-# Validate that the PR body contains every required section and that the
-# working tree reflects a successful upgrade. Returns 0 on success.
-validate_upgrade() {
-    local agent="$1"
-
+pr_body_has_required_sections() {
     for heading in \
         "### 摘要" \
         "### 已审阅的发布说明" \
@@ -251,11 +288,65 @@ validate_upgrade() {
         "### 验证" \
         "### 风险和审查重点"
     do
-        grep -Fq "${heading}" "${pr_body_file}" || {
-            echo "${agent} response is missing required PR section: ${heading}" >&2
-            return 1
-        }
+        grep -Fq "${heading}" "${pr_body_file}" || return 1
     done
+}
+
+normalize_pr_body() {
+    local tmp_body
+    tmp_body=$(mktemp)
+
+    # Some AI CLIs include progress chatter or wrap the final Markdown in a
+    # ```markdown fence. Keep only the required PR body so GitHub renders it.
+    awk '
+        BEGIN {
+            in_outer_fence = 0
+            saw_body = 0
+        }
+        !saw_body && /^```[[:space:]]*(markdown|md)?[[:space:]]*$/ {
+            in_outer_fence = 1
+            next
+        }
+        !saw_body && $0 == "### 摘要" {
+            saw_body = 1
+            print
+            next
+        }
+        !saw_body {
+            next
+        }
+        in_outer_fence && /^```[[:space:]]*$/ {
+            in_outer_fence = 0
+            next
+        }
+        {
+            print
+        }
+    ' "${pr_body_file}" > "${tmp_body}"
+
+    if [[ -s "${tmp_body}" ]]; then
+        mv "${tmp_body}" "${pr_body_file}"
+    else
+        rm -f "${tmp_body}"
+    fi
+}
+
+# Validate that the PR body contains every required section and that the
+# working tree reflects a successful upgrade. Returns 0 on success.
+validate_upgrade() {
+    local agent="$1"
+
+    pr_body_has_required_sections || {
+        echo "${agent} response is missing one or more required PR sections." >&2
+        return 1
+    }
+
+    local first_nonempty_line
+    first_nonempty_line=$(sed -n '/[^[:space:]]/{p;q;}' "${pr_body_file}")
+    if [[ "${first_nonempty_line}" != "### 摘要" ]]; then
+        echo "${agent} response has content before the required PR body." >&2
+        return 1
+    fi
 
     local actual_version
     actual_version=$(
@@ -264,6 +355,17 @@ validate_upgrade() {
     )
     if [[ "${actual_version}" != "${latest_version}" ]]; then
         echo "${agent} did not pin Cilium ${latest_version}; found ${actual_version}." >&2
+        return 1
+    fi
+
+    local actual_hubble_version
+    actual_hubble_version=$(
+        sed -n 's/^[[:space:]]*HUBBLE_CLI_VERSION=${HUBBLE_CLI_VERSION:-"\([^"]*\)"}.*/\1/p' \
+            cilium/version.sh |
+            sed 's/^v//'
+    )
+    if [[ "${actual_hubble_version}" != "${latest_hubble_version}" ]]; then
+        echo "${agent} did not pin Hubble CLI v${latest_hubble_version}; found v${actual_hubble_version}." >&2
         return 1
     fi
 
@@ -292,6 +394,9 @@ for agent in "${agent_order[@]}"; do
         echo "Skipping ${agent}: no credential configured."
         continue
     fi
+    if ! credential_usable_for "${agent}"; then
+        continue
+    fi
     case "${agent}" in
         copilot)
             if ! command -v copilot >/dev/null 2>&1; then
@@ -307,16 +412,37 @@ for agent in "${agent_order[@]}"; do
             ;;
     esac
 
-    echo "Attempting Cilium upgrade with ${agent}..."
-    if run_single_agent "${agent}" && validate_upgrade "${agent}"; then
-        success_agent="${agent}"
-        echo "${agent} completed the upgrade successfully."
-        break
-    fi
+    echo "Attempting Cilium upgrade with ${agent} (up to ${agent_max_attempts} attempt(s))..."
+    echo "${agent} attempt timeout: ${agent_timeout}"
 
-    print_ai_output "${agent}"
-    echo "${agent} failed; resetting worktree before next attempt." >&2
-    reset_worktree
+    for attempt in $(seq 1 "${agent_max_attempts}"); do
+        echo "--- ${agent} attempt ${attempt}/${agent_max_attempts} ---"
+        agent_status=0
+        if run_single_agent "${agent}"; then
+            agent_status=0
+        else
+            agent_status=$?
+        fi
+
+        normalize_pr_body
+        if validate_upgrade "${agent}"; then
+            success_agent="${agent}"
+            if [[ "${agent_status}" -ne 0 ]]; then
+                echo "${agent} returned exit status ${agent_status}, but produced a valid upgrade; accepting result." >&2
+            fi
+            echo "${agent} completed the upgrade successfully on attempt ${attempt}."
+            break 2
+        fi
+
+        print_ai_output "${agent}"
+        if [[ "${attempt}" -lt "${agent_max_attempts}" ]]; then
+            echo "${agent} attempt ${attempt} failed; resetting worktree before retry." >&2
+            reset_worktree
+        else
+            echo "${agent} attempt ${attempt} failed; exhausted ${agent_max_attempts} attempt(s)." >&2
+            reset_worktree
+        fi
+    done
 done
 
 rm -f "${context_file}"
@@ -344,6 +470,8 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
         echo "current_version=${current_version}"
         echo "target_minor=${target_minor}"
         echo "latest_version=${latest_version}"
+        echo "current_hubble_version=${current_hubble_version}"
+        echo "latest_hubble_version=${latest_hubble_version}"
         echo "release_url=${release_url}"
         echo "pr_body_path=${pr_body_file}"
         echo "changed=true"

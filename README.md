@@ -5,28 +5,28 @@
 本仓库按 Cilium 的 `x.y` 版本维护安装分支，每个分支只保留该 `x.y`
 系列的最新 `z` 版本。例如：
 
-- `cilium/v1.18`：保留最新的 Cilium `1.18.x`
-- `cilium/v1.19`：保留最新的 Cilium `1.19.x`
+- `cilium/release-v1.18`：保留最新的 Cilium `1.18.x`
+- `cilium/release-v1.19`：保留最新的 Cilium `1.19.x`
 
 如果需要安装特定的 Cilium `x.y` 系列，请直接 clone 对应分支。比如安装
 最新的 Cilium `1.18.x`：
 
 ```bash
-git clone -b cilium/v1.18 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.18
+git clone -b cilium/release-v1.18 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.18
 cd deployCilium-v1.18/cilium
 ```
 
-如果需要安装 Cilium `1.19.x`，把分支名替换为 `cilium/v1.19`：
+如果需要安装 Cilium `1.19.x`，把分支名替换为 `cilium/release-v1.19`：
 
 ```bash
-git clone -b cilium/v1.19 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.19
+git clone -b cilium/release-v1.19 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.19
 cd deployCilium-v1.19/cilium
 ```
 
 可以通过如下命令查看当前可用的 Cilium 安装分支：
 
 ```bash
-git ls-remote --heads https://github.com/spidernet-io/deployCilium.git 'cilium/v*'
+git ls-remote --heads https://github.com/spidernet-io/deployCilium.git 'cilium/release-v*'
 ```
 
 可以通过如下命令查看当前分支实际保留的 Cilium patch 版本：
@@ -46,7 +46,7 @@ chmod +x ./setup.sh ./showStatus.sh
 ```
 
 注意：`main` 分支只维护自动升级逻辑，不作为安装分支使用。安装 Cilium 时请使用
-`cilium/vX.Y` 分支。
+`cilium/release-vX.Y` 分支。
 
 ##  工程目录
 
@@ -94,20 +94,20 @@ cilium/
 
 适用于集群节点可以直接访问公网镜像源的场景。脚本默认从 DaoCloud 在线镜像仓库拉取镜像。
 
-1. clone 对应的 `cilium/vX.Y` 分支到 master 节点
+1. clone 对应的 `cilium/release-vX.Y` 分支到 master 节点
 
     以安装最新的 Cilium `1.18.x` 为例：
 
     ```bash
-    git clone -b cilium/v1.18 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.18
+    git clone -b cilium/release-v1.18 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.18
     cd deployCilium-v1.18/cilium
     chmod +x ./setup.sh ./showStatus.sh
     ```
 
-    如需安装其它 `x.y` 系列，把分支名替换为 `cilium/v1.19` 等。可用分支可通过如下命令查看：
+    如需安装其它 `x.y` 系列，把分支名替换为 `cilium/release-v1.19` 等。可用分支可通过如下命令查看：
 
     ```bash
-    git ls-remote --heads https://github.com/spidernet-io/deployCilium.git 'cilium/v*'
+    git ls-remote --heads https://github.com/spidernet-io/deployCilium.git 'cilium/release-v*'
     ```
 
 2. 设置环境变量并安装
@@ -184,10 +184,10 @@ cilium/
 
 #### 步骤 1：在准备机上 clone 对应分支并渲染镜像列表
 
-在准备机上 clone 对应的 `cilium/vX.Y` 分支（与离线集群实际安装时使用的分支保持一致）：
+在准备机上 clone 对应的 `cilium/release-vX.Y` 分支（与离线集群实际安装时使用的分支保持一致）：
 
 ```bash
-git clone -b cilium/v1.18 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.18
+git clone -b cilium/release-v1.18 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.18
 cd deployCilium-v1.18/cilium
 chmod +x ./setup.sh
 ```
@@ -256,10 +256,10 @@ done < images.txt
 
 #### 步骤 3：在离线集群上 clone 对应分支
 
-在离线集群的 master 节点上 clone 同一个 `cilium/vX.Y` 分支：
+在离线集群的 master 节点上 clone 同一个 `cilium/release-vX.Y` 分支：
 
 ```bash
-git clone -b cilium/v1.18 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.18
+git clone -b cilium/release-v1.18 --single-branch https://github.com/spidernet-io/deployCilium.git deployCilium-v1.18
 cd deployCilium-v1.18/cilium
 chmod +x ./setup.sh ./showStatus.sh
 ```
