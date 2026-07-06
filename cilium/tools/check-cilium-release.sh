@@ -45,7 +45,7 @@ infer_target_minor_from_ref() {
         "${GITHUB_REF_NAME:-}" \
         "$(git -C "${project_root}" branch --show-current 2>/dev/null || true)"
     do
-        if [[ "${ref}" =~ (^|/)cilium/v([0-9]+\.[0-9]+)$ ]]; then
+        if [[ "${ref}" =~ (^|/)cilium/release-v([0-9]+\.[0-9]+)$ ]]; then
             printf '%s' "${BASH_REMATCH[2]}"
             return 0
         fi
