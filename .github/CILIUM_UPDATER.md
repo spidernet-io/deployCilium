@@ -93,6 +93,33 @@ minor 为起点复制出来的。Hubble CLI 也按同一个 `X.Y` minor 选择
 
 pull request 验证 workflow 会针对目标为 `cilium/v*` 分支的 PR 和 push 运行。
 
+## e2e 失败后的 AI 修复流程
+
+首次升级阶段只负责生成升级 diff、通过静态验证并创建或更新 PR；它不会在同一次
+运行里等待 PR e2e 完成。PR 创建后，`Validate Cilium Installation` workflow 会
+运行 `make test-single` 和 `make test-multi`。如果 e2e 失败，后续修复应作为独立
+阶段处理，避免把初始升级、CI 诊断和推送修复混在同一个不可控的 agent 回合里。
+
+推荐流程：
+
+1. 检出失败 PR 的 head 分支，例如 `automation/cilium-vX.Y-latest`。
+2. 获取失败的 GitHub Actions job 完整日志，并优先定位第一个真实失败点。不要只根据
+   `make debug` 最后的 event 下结论。
+3. 让 AI 使用 `cilium/tools/prompts/cilium-upgrade-e2e-repair.md` 作为修复提示词。
+   该提示词要求 AI 对照 PR diff、目标 chart 默认值、官方升级文档和 CI 日志分析根因。
+4. 如果失败 job 的 kind 集群仍然可用，修复后优先在当前集群上重新执行安装脚本或
+   `cilium/setup.sh`，让 Helm 走 `upgrade --install` 原地更新：
+   - `test/scripts/install-cilium.sh <cluster> <cluster-id> <pod-cidr> <hubble-port> <clustermesh-port>`
+   - 或在 `cilium/` 目录下使用同一组环境变量重新运行 `./setup.sh`
+5. 原地升级后继续运行 `cilium status --wait`、必要的 `kubectl wait` 和失败用例。
+   只有当旧资源残留让问题无法判断时，才清理并重建 kind 集群。
+6. 修复验证通过后，AI 只暂存相关文件，提交并推送到同一个 PR head 分支。推送会再次
+   触发 PR e2e，保留 CI 的最终结果作为合并依据。
+
+这种模式可以显著缩短调试周期：例如 values 字段缺失导致 Pod 挂载失败时，修复
+`cilium/values.yaml` 后直接重新运行 Helm upgrade，即可验证 Deployment 是否重新
+渲染出所需 ConfigMap/Secret，而无需重新创建整个 kind 集群。
+
 ## 必需的仓库 secrets
 
 workflow 会按优先级依次尝试每个 AI CLI，直到其中一个成功：
@@ -138,8 +165,9 @@ manifest 自动化分支的 push remote；PR 创建动作本身仍使用 `GITHUB
 - `CILIUM_UPGRADE_SKIP_VALIDATION=true`：本地调试时跳过 `make prepare` 和
   `make ci-validate`。workflow 不设置该变量，因此默认会执行验证。
 
-实现提示词维护在 `cilium/tools/prompts/cilium-upgrade.md`。workflow 将生成的变更
-限制在部署代码、测试和项目文档内；GitHub Actions 变更必须由人工审查并提交。
+初始升级提示词维护在 `cilium/tools/prompts/cilium-upgrade.md`。PR e2e 失败后的
+修复提示词维护在 `cilium/tools/prompts/cilium-upgrade-e2e-repair.md`。workflow 将
+生成的变更限制在部署代码、测试和项目文档内；GitHub Actions 变更必须由人工审查并提交。
 
 ## 本地执行
 
