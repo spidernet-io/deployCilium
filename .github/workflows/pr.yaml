@@ -58,4 +58,3 @@ jobs:
           kubectl config use-context kind-cluster2 && make debug
       - if: always()
         run: make clean
-
