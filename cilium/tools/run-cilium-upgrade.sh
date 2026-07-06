@@ -36,7 +36,7 @@ Environment:
                            unset, the script reads cilium/version.sh itself.
   CILIUM_TARGET_MINOR       Target Cilium minor (x.y). Defaults to the current
                             version's minor. Maintenance branches should set
-                            this from their branch name, e.g. cilium/v1.18.
+                            this from their branch name, e.g. cilium/release-v1.18.
   COPILOT_GITHUB_TOKEN      Copilot credential (fine-grained PAT with
                             "Copilot Requests" permission).
   COPILOT_MODEL             Optional model name passed to copilot.
