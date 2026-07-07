@@ -1,6 +1,11 @@
 name: Validate Cilium Installation
 
 on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag, or SHA to validate'
+        required: false
   pull_request:
     branches:
       - 'cilium/release-v*'
@@ -13,12 +18,17 @@ on:
     branches:
       - 'cilium/release-v*'
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     name: Validate Configuration
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - run: make install-tools
       - run: make prepare
       - run: make ci-validate
@@ -32,6 +42,8 @@ jobs:
       DISABLE_HELM_ATOMIC: "true"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - run: make install-tools
       - run: make test-single
       - if: failure()
@@ -48,6 +60,8 @@ jobs:
       DISABLE_HELM_ATOMIC: "true"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - run: make install-tools
       - run: make test-multi
       - if: failure()
