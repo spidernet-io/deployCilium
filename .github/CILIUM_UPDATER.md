@@ -88,32 +88,40 @@ minor 为起点复制出来的。Hubble CLI 也按同一个 `X.Y` minor 选择
 
 - Base branch：`cilium/release-vX.Y`
 - Head branch：`automation/cilium-vX.Y-latest`
-- Title：`chore: 将 Cilium X.Y 升级至 X.Y.z`
+- Title：`[AutoUpdate vX.Y] Cilium version vA.B.C -> vX.Y.z`
 
-pull request 验证 workflow 会针对目标为 `cilium/release-v*` 分支的 PR 和 push 运行。
+pull request 验证 workflow 会针对目标为 `cilium/release-v*` 分支的 PR 和 push 运行，
+也可以通过 `workflow_dispatch` 手动指定 `ref` 运行。自动升级 PR 使用仓库默认的
+`GITHUB_TOKEN` 创建，因此 GitHub 可能要求人工在 PR 页面批准或手动触发 e2e。月度
+升级 workflow 会在创建 PR 前先运行同一套 e2e，避免把明显失败的升级直接提交成 PR。
 
-## e2e 失败后的 AI 修复流程
+## PR 前 e2e 和 AI 修复流程
 
-首次升级阶段只负责生成升级 diff、通过静态验证并创建或更新 PR；它不会在同一次
-运行里等待 PR e2e 完成。PR 创建后，`Validate Cilium Installation` workflow 会
-运行 `make test-single` 和 `make test-multi`。如果 e2e 失败，后续修复应作为独立
-阶段处理，避免把初始升级、CI 诊断和推送修复混在同一个不可控的 agent 回合里。
+首次升级阶段会生成升级 diff 并通过静态验证。之后，月度 workflow 会在同一个
+`worktree` 里运行 `make test-single` 和 `make test-multi`，只有 e2e 通过后才创建
+或更新 PR。
 
-推荐流程：
+默认流程：
 
-1. 检出失败 PR 的 head 分支，例如 `automation/cilium-vX.Y-latest`。
-2. 获取失败的 GitHub Actions job 完整日志，并优先定位第一个真实失败点。不要只根据
-   `make debug` 最后的 event 下结论。
-3. 让 AI 使用 `cilium/tools/prompts/cilium-upgrade-e2e-repair.md` 作为修复提示词。
-   该提示词要求 AI 对照 PR diff、目标 chart 默认值、官方升级文档和 CI 日志分析根因。
-4. 如果失败 job 的 kind 集群仍然可用，修复后优先在当前集群上重新执行安装脚本或
-   `cilium/setup.sh`，让 Helm 走 `upgrade --install` 原地更新：
+1. AI 先按 `cilium/tools/prompts/cilium-upgrade.md` 完成版本升级和静态验证。
+2. workflow 在创建 PR 前运行 `make test-single` 和 `make test-multi`。
+3. 如果 e2e 失败且仓库 variable `ENABLE_AI_E2E_REPAIR=true`，workflow 会收集失败日志，
+   让 AI 使用 `cilium/tools/prompts/cilium-upgrade-e2e-repair.md` 作为修复提示词。
+   该提示词要求 AI 对照升级 diff、目标 chart 默认值、官方升级文档和 CI 日志分析根因。
+4. 修复脚本在已有升级 diff 的基础上做最小修改，并要求 AI 在修复总结中明确列出：
+   修改了哪些参数或脚本行为、每项修改的作用、为什么能让 e2e 通过。
+5. 修复后 workflow 重新运行 `make test-single` 和 `make test-multi`。这两个目标的
+   集群创建逻辑是幂等的：如果同名 kind 集群已经存在，就跳过创建，继续执行
+   `install-cilium.sh` / `setup.sh`，让 Helm 走 `upgrade --install` 验证修复后的
+   `values.yaml` 或脚本参数。只有修复后 e2e 通过，才继续创建或更新 PR；否则
+   workflow 失败，不提交 PR。
+6. 最终 PR 描述会追加“升级测试和修复记录”，包括初次 e2e 结果、是否运行 AI 修复、
+   修复说明、最终验证结果。
+
+如果需要人工复现失败，仍可检出自动升级分支并按提示词里的建议优先使用原地升级：
+
    - `test/scripts/install-cilium.sh <cluster> <cluster-id> <pod-cidr> <hubble-port> <clustermesh-port>`
    - 或在 `cilium/` 目录下使用同一组环境变量重新运行 `./setup.sh`
-5. 原地升级后继续运行 `cilium status --wait`、必要的 `kubectl wait` 和失败用例。
-   只有当旧资源残留让问题无法判断时，才清理并重建 kind 集群。
-6. 修复验证通过后，AI 只暂存相关文件，提交并推送到同一个 PR head 分支。推送会再次
-   触发 PR e2e，保留 CI 的最终结果作为合并依据。
 
 这种模式可以显著缩短调试周期：例如 values 字段缺失导致 Pod 挂载失败时，修复
 `cilium/values.yaml` 后直接重新运行 Helm upgrade，即可验证 Deployment 是否重新
@@ -127,17 +135,12 @@ workflow 会按优先级依次尝试每个 AI CLI，直到其中一个成功：
 
 - `COPILOT_GITHUB_TOKEN`：Copilot CLI 凭据，需要可用于 `@github/copilot` CLI。
   它只用于 AI 升级步骤，不用于创建分支或 PR。
-- `PR_TOKEN`：fine-grained PAT，需要具备 `Contents: Read and write` 和
-  `Pull requests: Read and write` 权限。workflow 使用该 token 创建维护分支、推送
-  自动化分支并创建或更新 PR。
 - `DEEPSEEK_API_KEY`：供 `opencode run` 调用 DeepSeek 使用的 API key。
 
-创建缺失的 `cilium/release-vX.Y` 维护分支时，workflow 会优先使用 `PR_TOKEN`，
-未设置时回退到默认 `GITHUB_TOKEN`。创建或更新 PR 时必须设置 `PR_TOKEN`。
-workflow 默认的 `GITHUB_TOKEN` 绝不会用作 Copilot 凭据或 PR 创建 token。使用默认
-token 创建的 pull request 不会触发新的 `pull_request` 事件，因此
-`.github/workflows/pr.yaml` 不会启动 e2e 任务。`PR_TOKEN` 会让 PR 创建
-表现得像普通用户操作，并自动触发这些测试。
+workflow 使用默认 `GITHUB_TOKEN` 创建缺失的 `cilium/release-vX.Y` 维护分支、
+推送自动化分支并创建或更新 PR。这样不依赖个人 PAT 或组织成员权限。代价是 GitHub
+可能不会自动运行 bot 创建 PR 的普通 `pull_request` e2e，需要由 assignee 在 PR 页面
+批准运行，或者手动触发 `Validate Cilium Installation` workflow 并填写 PR head 分支。
 
 可选的仓库 variables：
 
@@ -145,6 +148,10 @@ token 创建的 pull request 不会触发新的 `pull_request` 事件，因此
   DeepSeek 使用 `deepseek/deepseek-v4-pro`。
 - `DEEPSEEK_MODEL`：只覆盖 DeepSeek 的 opencode 模型名称，例如
   `deepseek/deepseek-v4-pro`。
+- `CILIUM_UPGRADE_PR_ASSIGNEE`：自动升级 PR 和版本清单 PR 的 assignee。省略时为
+  `cyclinder`。
+- `ENABLE_AI_E2E_REPAIR`：设置为 `true` 时，允许月度升级 workflow 在 PR 前 e2e
+  失败后运行 AI 修复并重跑 e2e。
 
 初始升级提示词维护在 `cilium/tools/prompts/cilium-upgrade.md`。PR e2e 失败后的
 修复提示词维护在 `cilium/tools/prompts/cilium-upgrade-e2e-repair.md`。workflow 将
@@ -168,7 +175,6 @@ npm install --global @github/copilot@latest
 npm install --global opencode-ai@latest
 
 export COPILOT_GITHUB_TOKEN='...'
-export PR_TOKEN='...'
 export DEEPSEEK_API_KEY='...'
 export CILIUM_TARGET_MINOR=1.18
 cilium/tools/run-cilium-upgrade.sh
