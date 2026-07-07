@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
   pull-requests: write
 
 concurrency:
@@ -32,7 +33,6 @@ jobs:
         id: discover
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          PR_TOKEN: ${{ secrets.PR_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -120,7 +120,7 @@ jobs:
             if branch_exists "${new_branch}"; then
               source_branch="${new_branch}"
             else
-              branch_push_token="${PR_TOKEN:-${GITHUB_TOKEN}}"
+              branch_push_token="${GITHUB_TOKEN}"
               if [[ -z "${branch_push_token}" ]]; then
                 echo "Missing token; required to create ${new_branch} from ${source_branch}." >&2
                 exit 1
@@ -173,7 +173,7 @@ jobs:
     needs: prepare-branches
     if: needs.prepare-branches.outputs.branches != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -252,47 +252,185 @@ jobs:
         run: |
           updater/cilium/tools/run-cilium-upgrade.sh
 
-      - name: Verify PR token
+      - name: Run pre-PR e2e validation
+        if: steps.upgrade.outputs.changed == 'true'
+        id: initial-e2e
+        working-directory: worktree
+        env:
+          DISABLE_HELM_ATOMIC: "true"
+        run: |
+          set +e
+
+          log_file="/tmp/cilium-upgrade-initial-e2e.log"
+          exec > >(tee "${log_file}") 2>&1
+
+          status="success"
+
+          echo "## Initial single-cluster e2e"
+          if ! make test-single; then
+            status="failed"
+            make debug || true
+          fi
+          if [[ "${status}" == "success" ]]; then
+            make clean || true
+          else
+            echo "Keeping single-cluster environment for AI repair."
+          fi
+
+          echo "## Initial multi-cluster e2e"
+          if ! make test-multi; then
+            status="failed"
+            echo "=== Cluster1 Debug ==="
+            kubectl config use-context kind-cluster1 && make debug || true
+            echo "=== Cluster2 Debug ==="
+            kubectl config use-context kind-cluster2 && make debug || true
+          fi
+          if [[ "${status}" == "success" ]]; then
+            make clean || true
+          else
+            echo "Keeping e2e clusters for AI repair."
+          fi
+
+          {
+            echo "status=${status}"
+            echo "log_file=${log_file}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Run AI e2e repair
+        if: >
+          steps.upgrade.outputs.changed == 'true' &&
+          steps.initial-e2e.outputs.status == 'failed' &&
+          vars.ENABLE_AI_E2E_REPAIR == 'true'
+        id: repair
+        working-directory: worktree
+        env:
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          CILIUM_E2E_FAILED_LOG: ${{ steps.initial-e2e.outputs.log_file }}
+          CILIUM_E2E_REPAIR_SUMMARY: /tmp/cilium-e2e-repair-summary.md
+          CILIUM_E2E_REPAIR_ALLOW_DIRTY: "true"
+          CILIUM_E2E_PR_NUMBER: "pre-pr"
+          CILIUM_E2E_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CILIUM_PROJECT_ROOT: ${{ github.workspace }}/worktree
+          CILIUM_UPDATER_ROOT: ${{ github.workspace }}/updater
+        run: ../updater/cilium/tools/run-cilium-e2e-repair.sh
+
+      - name: Rerun e2e after AI repair
+        if: steps.repair.outputs.changed == 'true'
+        id: repaired-e2e
+        working-directory: worktree
+        env:
+          DISABLE_HELM_ATOMIC: "true"
+        run: |
+          set +e
+
+          log_file="/tmp/cilium-upgrade-repaired-e2e.log"
+          exec > >(tee "${log_file}") 2>&1
+
+          status="success"
+
+          echo "## Repaired single-cluster e2e"
+          if ! make test-single; then
+            status="failed"
+            make debug || true
+          fi
+
+          echo "## Repaired multi-cluster e2e"
+          if ! make test-multi; then
+            status="failed"
+            echo "=== Cluster1 Debug ==="
+            kubectl config use-context kind-cluster1 && make debug || true
+            echo "=== Cluster2 Debug ==="
+            kubectl config use-context kind-cluster2 && make debug || true
+          fi
+          if [[ "${status}" == "success" ]]; then
+            make clean || true
+          else
+            echo "Keeping failed repaired e2e clusters for debugging."
+          fi
+
+          {
+            echo "status=${status}"
+            echo "log_file=${log_file}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Require e2e success before PR
         if: steps.upgrade.outputs.changed == 'true'
         env:
-          PR_TOKEN: ${{ secrets.PR_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          INITIAL_E2E_STATUS: ${{ steps.initial-e2e.outputs.status }}
+          REPAIR_CHANGED: ${{ steps.repair.outputs.changed }}
+          REPAIRED_E2E_STATUS: ${{ steps.repaired-e2e.outputs.status }}
         run: |
           set -euo pipefail
 
-          test -n "${PR_TOKEN}" || {
-            echo "Missing repository secret PR_TOKEN" >&2
-            exit 1
-          }
+          if [[ "${INITIAL_E2E_STATUS}" == "success" ]]; then
+            exit 0
+          fi
 
-          curl --fail --silent --show-error --location \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${PR_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}" \
-            >/dev/null || {
-              echo "PR_TOKEN is not valid for ${GITHUB_REPOSITORY}." >&2
-              echo "Check that the repository secret is current and grants Contents: Read and write plus Pull requests: Read and write." >&2
-              exit 1
-            }
+          if [[ "${REPAIR_CHANGED}" == "true" && "${REPAIRED_E2E_STATUS}" == "success" ]]; then
+            exit 0
+          fi
 
-      - name: Configure PR branch push credentials
+          echo "Cilium upgrade e2e did not pass; refusing to create an upgrade PR." >&2
+          echo "Initial e2e: ${INITIAL_E2E_STATUS}" >&2
+          echo "Repair changed: ${REPAIR_CHANGED:-false}" >&2
+          echo "Repaired e2e: ${REPAIRED_E2E_STATUS:-not-run}" >&2
+          exit 1
+
+      - name: Append e2e and repair summary to PR body
         if: steps.upgrade.outputs.changed == 'true'
         working-directory: worktree
         env:
-          PR_TOKEN: ${{ secrets.PR_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_BODY_PATH: ${{ steps.upgrade.outputs.pr_body_path }}
+          INITIAL_E2E_STATUS: ${{ steps.initial-e2e.outputs.status }}
+          REPAIR_CHANGED: ${{ steps.repair.outputs.changed }}
+          REPAIR_AGENT: ${{ steps.repair.outputs.agent }}
+          REPAIRED_E2E_STATUS: ${{ steps.repaired-e2e.outputs.status }}
+          REPAIR_SUMMARY_PATH: ${{ steps.repair.outputs.summary_path }}
         run: |
           set -euo pipefail
 
-          git remote set-url origin "https://x-access-token:${PR_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          {
+            echo
+            echo "### 升级测试和修复记录"
+            echo
+            echo "| 阶段 | 结果 | 说明 |"
+            echo "|---|---|---|"
+            echo "| 初次 AI 升级后 e2e | ${INITIAL_E2E_STATUS} | 本 workflow 在创建 PR 前运行 \`make test-single\` 和 \`make test-multi\`。 |"
+            if [[ "${REPAIR_CHANGED}" == "true" ]]; then
+              echo "| AI e2e 修复 | success | 使用 ${REPAIR_AGENT} 基于失败日志修复，并通过 \`make prepare\` / \`make ci-validate\`。 |"
+              echo "| 修复后 e2e | ${REPAIRED_E2E_STATUS} | 修复后重新运行 \`make test-single\` 和 \`make test-multi\`；已有同名 kind 集群会被复用，并重新执行 Cilium 安装。 |"
+            else
+              echo "| AI e2e 修复 | not-run | 初次 e2e 已通过，未额外调整参数；或未启用 \`ENABLE_AI_E2E_REPAIR\`。 |"
+            fi
+            echo
+            if [[ "${REPAIR_CHANGED}" == "true" && -n "${REPAIR_SUMMARY_PATH}" && -s "${REPAIR_SUMMARY_PATH}" ]]; then
+              echo "#### AI 修复说明"
+              echo
+              cat "${REPAIR_SUMMARY_PATH}"
+              echo
+            else
+              echo "#### 额外参数调整"
+              echo
+              echo "无。初次升级生成的配置通过 e2e，未在测试阶段追加手动参数修复。"
+              echo
+            fi
+            echo "#### 最终验证"
+            echo
+            echo "- \`make prepare\`：通过"
+            echo "- \`make ci-validate\`：通过"
+            echo "- \`make test-single\`：通过"
+            echo "- \`make test-multi\`：通过"
+          } >> "${PR_BODY_PATH}"
 
       - name: Create or update upgrade PR
         if: steps.upgrade.outputs.changed == 'true'
         id: cpr
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.PR_TOKEN }}
+          token: ${{ github.token }}
           path: worktree
           base: ${{ matrix.branch }}
           branch: automation/cilium-v${{ matrix.target_minor }}-latest
@@ -301,6 +439,7 @@ jobs:
             [AutoUpdate v${{ matrix.target_minor }}] Cilium version v${{ steps.upgrade.outputs.current_version }} -> v${{ steps.upgrade.outputs.latest_version }}
           title: '[AutoUpdate v${{ matrix.target_minor }}] Cilium version v${{ steps.upgrade.outputs.current_version }} -> v${{ steps.upgrade.outputs.latest_version }}'
           body-path: ${{ steps.upgrade.outputs.pr_body_path }}
+          assignees: ${{ vars.CILIUM_UPGRADE_PR_ASSIGNEE || 'cyclinder' }}
           add-paths: |
             cilium/**
             test/**
@@ -325,7 +464,7 @@ jobs:
       - name: Check out main
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.PR_TOKEN }}
+          token: ${{ github.token }}
           fetch-depth: 0
 
       - name: Update supported Cilium versions file
@@ -357,48 +496,17 @@ jobs:
             ' "${manifest_path}" > "${tmp_file}"
           mv "${tmp_file}" "${manifest_path}"
 
-      - name: Verify PR token
-        env:
-          PR_TOKEN: ${{ secrets.PR_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
-          test -n "${PR_TOKEN}" || {
-            echo "Missing repository secret PR_TOKEN" >&2
-            exit 1
-          }
-
-          curl --fail --silent --show-error --location \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${PR_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}" \
-            >/dev/null || {
-              echo "PR_TOKEN is not valid for ${GITHUB_REPOSITORY}." >&2
-              echo "Check that the repository secret is current and grants Contents: Read and write plus Pull requests: Read and write." >&2
-              exit 1
-            }
-
-      - name: Configure manifest PR branch push credentials
-        env:
-          PR_TOKEN: ${{ secrets.PR_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
-          git remote set-url origin "https://x-access-token:${PR_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-
       - name: Create or update manifest PR
         id: manifest-pr
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.PR_TOKEN }}
+          token: ${{ github.token }}
           base: main
           branch: automation/cilium-supported-versions
           delete-branch: true
           commit-message: 'chore: 更新 Cilium 支持版本清单'
           title: 'chore: 更新 Cilium 支持版本清单'
+          assignees: ${{ vars.CILIUM_UPGRADE_PR_ASSIGNEE || 'cyclinder' }}
           body: |
             更新 `.github/cilium-supported-versions.json` 中记录的 Cilium 最新 patch 版本。
           add-paths: |
