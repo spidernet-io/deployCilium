@@ -80,10 +80,14 @@ test-syntax: ## Test shell scripts syntax
 # Create a cluster with given parameters
 define create-cluster
 	@printf '%b\n' "$(BLUE)Creating cluster: $(1)...$(NC)"
-	@chmod +x $(TEST_DIR)/scripts/create-kind-cluster.sh
-	@export K8S_VERSION=$(K8S_VERSION) ; \
-	$(TEST_DIR)/scripts/create-kind-cluster.sh $(1) $(2) $(3)
-	@printf '%b\n' "$(GREEN)✓ Cluster $(1) created$(NC)"
+	@if kind get clusters 2>/dev/null | grep -Fxq "$(1)"; then \
+		printf '%b\n' "$(YELLOW)Cluster $(1) already exists; reusing it$(NC)"; \
+	else \
+		chmod +x $(TEST_DIR)/scripts/create-kind-cluster.sh; \
+		export K8S_VERSION=$(K8S_VERSION); \
+		$(TEST_DIR)/scripts/create-kind-cluster.sh $(1) $(2) $(3); \
+		printf '%b\n' "$(GREEN)✓ Cluster $(1) created$(NC)"; \
+	fi
 endef
 
 # Install Cilium on a cluster
