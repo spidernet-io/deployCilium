@@ -3,14 +3,14 @@
 :<<EOF
  脚本调用命令：
  ingress.sh  \
- 	--ingress-ip "172.16.13.90"  \
- 	--ingress-interface "macvlan0" \
- 	--egress-interface "veth-ns" \
- 	--via-ip "172.16.13.11" \
- 	--via-mac "08:00:27:bb:01:14" \
- 	--total-bandwidth "300Mbit" \
- 	--tc-rule "80:10Mbit"  \
- 	--tc-rule "443,900:20Mbit"
+         --ingress-ip "172.16.13.90"  \
+         --ingress-interface "macvlan0" \
+         --egress-interface "veth-ns" \
+         --via-ip "172.16.13.11" \
+         --total-bandwidth "300Mbit"  \
+         --tc-default "10Mbit" \
+         --tc-rule "web-server:80:10Mbit"  \
+         --tc-rule "secure-app:443,900:20Mbit"
 
  ./ingress.sh show  
 
@@ -20,15 +20,15 @@
  3. 设置路由转发  ip r add <ingress-ip> via <via-ip> dev <egress-interface> onlink  和邻居表 ip n add <via-ip> lladdr <via-mac> dev <egress-interface> nud permanent
  4. 在 egress-interface 上配置 TC 规则，对 ingress-ip 的不同 端口 的流量 进行限流：
      - 一级父类：设置总网卡带宽 <total-bandwidth>
-     - 二级子类A：缺省类，其他流量共享父类总带宽
-     - 二级子类B+：基于 tc-rule 参数创建，格式 "port[,port]...:bandwidth"
+     - 二级子类A：缺省类，未显式声明端口的流量处理方式由 <tc-default> 指定
+     - 二级子类B+：基于 tc-rule 参数创建，格式 "name:port[,port]...:bandwidth"
 
 
 qdisc htb 1: root (总带宽)
 ├── class 1:1 (一级父类) 
-    ├── class 1:10 (缺省，其他端口共享)
-    ├── class 1:11 (端口组1限流)
-    ├── class 1:12 (端口组2限流)
+    ├── class 1:10 (缺省，根据tc-default配置)
+    ├── class 1:11 (端口组1限流 - web-server)
+    ├── class 1:12 (端口组2限流 - secure-app)
     └── ......
 EOF
 
@@ -40,13 +40,16 @@ INGRESS_IP=""              # Target ingress IP with CIDR mask
 INGRESS_INTERFACE=""       # Ingress network interface for ARP proxy
 EGRESS_INTERFACE=""        # Egress network interface for TC rules
 VIA_IP=""                  # Next hop IP address
-VIA_MAC=""                 # Next hop MAC address
+VIA_MAC=""                 # Next hop MAC address (auto-detected)
 TOTAL_BANDWIDTH=""         # Total bandwidth limit
-TC_RULES=()                # Array of TC rules in format "port[,port]...:bandwidth"
+TC_DEFAULT=""              # Default handling for unconfigured ports: "drop", "shared", or "bandwidth"
+TC_DEFAULT_MODE=""         # Parsed default mode: "drop", "shared", or "custom"
+TC_DEFAULT_BANDWIDTH=""    # Parsed default bandwidth for shared/custom mode
+TC_RULES=()                # Array of TC rules in format "name:port[,port]...:bandwidth"
 TARGET_IP=""               # Extracted target IP without CIDR mask
 SHOW_MODE=false            # Flag for show mode operation
 DETECTED_INGRESS_IP=""     # Auto-detected ingress IP for show mode
-DETECTED_VIA_IP=""         # Auto-detected via IP for show mode
+DETECTED_VIA_IP=""        # Auto-detected via IP for show mode
 DETECTED_INGRESS_INTERFACE="" # Auto-detected ingress interface for show mode
 DETECTED_VIA_MAC=""        # Auto-detected via MAC for show mode
 
@@ -62,14 +65,23 @@ show_help() {
     echo "  --ingress-interface IFACE  Ingress network interface for ARP proxy (required)"
     echo "  --egress-interface IFACE   Egress network interface for TC rules (required)"
     echo "  --via-ip IP                Next hop IP address (required)"
-    echo "  --via-mac MAC              Next hop MAC address (required)"
     echo "  --total-bandwidth BW       Total bandwidth limit (required)"
-    echo "  --tc-rule RULE             TC rule in format: 'port[,port]...:bandwidth' (repeatable)"
+    echo "  --tc-default MODE          Default handling for unconfigured ports (required)"
+    echo "                             'drop' - drop unconfigured traffic"
+    echo "                             'shared' - share total bandwidth for unconfigured traffic"
+    echo "                             'bandwidth' - share specified bandwidth (e.g., '10Mbit', '100kbit')"
+    echo "  --tc-rule RULE             TC rule in format: 'name:port[,port]...:bandwidth' (repeatable)"
     echo "  --help                     Show this help information"
     echo ""
     echo "Examples:"
-    echo "  Configure ingress forwarding and traffic shaping:"
-    echo "  $0 --ingress-ip '192.168.0.10/24' --ingress-interface 'macvlan0' --egress-interface 'veth0' --via-ip '192.168.0.20' --via-mac '08:00:27:bb:01:14' --total-bandwidth '300Mbit' --tc-rule '80:10Mbit' --tc-rule '443,900:20Mbit'"
+    echo "  Configure ingress forwarding and traffic shaping (drop unconfigured traffic):"
+    echo "  $0 --ingress-ip '192.168.0.10/24' --ingress-interface 'macvlan0' --egress-interface 'veth0' --via-ip '192.168.0.20' --total-bandwidth '300Mbit' --tc-default 'drop' --tc-rule 'web:80:10Mbit' --tc-rule 'secure:443,900:20Mbit'"
+    echo ""
+    echo "  Configure ingress forwarding and traffic shaping (shared total bandwidth for unconfigured traffic):"
+    echo "  $0 --ingress-ip '192.168.0.10/24' --ingress-interface 'macvlan0' --egress-interface 'veth0' --via-ip '192.168.0.20' --total-bandwidth '300Mbit' --tc-default 'shared' --tc-rule 'web:80:10Mbit' --tc-rule 'secure:443,900:20Mbit'"
+    echo ""
+    echo "  Configure ingress forwarding and traffic shaping (shared custom bandwidth for unconfigured traffic):"
+    echo "  $0 --ingress-ip '192.168.0.10/24' --ingress-interface 'macvlan0' --egress-interface 'veth0' --via-ip '192.168.0.20' --total-bandwidth '300Mbit' --tc-default '10Mbit' --tc-rule 'web:80:10Mbit' --tc-rule 'secure:443,900:20Mbit'"
     echo ""
     echo "  Display current configuration:"
     echo "  $0 show --egress-interface eth0           # View configuration for specified interface"
@@ -115,14 +127,14 @@ parse_arguments() {
                 echo "[DEBUG] Set via IP: $VIA_IP" >&2
                 shift 2
                 ;;
-            --via-mac)
-                VIA_MAC="$2"
-                echo "[DEBUG] Set via MAC: $VIA_MAC" >&2
-                shift 2
-                ;;
             --total-bandwidth)
                 TOTAL_BANDWIDTH="$2"
                 echo "[DEBUG] Set total bandwidth: $TOTAL_BANDWIDTH" >&2
+                shift 2
+                ;;
+            --tc-default)
+                TC_DEFAULT="$2"
+                echo "[DEBUG] Set tc-default: $TC_DEFAULT" >&2
                 shift 2
                 ;;
             --tc-rule)
@@ -143,6 +155,89 @@ parse_arguments() {
     done
     
     echo "[DEBUG] Parameter parsing completed" >&2
+    
+    # Validate required parameters immediately after parsing (except for show mode)
+    if [[ "$SHOW_MODE" == false ]]; then
+        validate_required_parameters
+    fi
+}
+
+# --- Validate Required Parameters Function ---
+validate_required_parameters() {
+    echo "[DEBUG] Validating required parameters" >&2
+    local errors=0
+
+    if [[ -z "$INGRESS_IP" ]]; then
+        echo "[ERROR] Missing required parameter: --ingress-ip" >&2
+        errors=1
+    fi
+
+    if [[ -z "$INGRESS_INTERFACE" ]]; then
+        echo "[ERROR] Missing required parameter: --ingress-interface" >&2
+        errors=1
+    fi
+
+    if [[ -z "$EGRESS_INTERFACE" ]]; then
+        echo "[ERROR] Missing required parameter: --egress-interface" >&2
+        errors=1
+    fi
+
+    if [[ -z "$VIA_IP" ]]; then
+        echo "[ERROR] Missing required parameter: --via-ip" >&2
+        errors=1
+    fi
+
+    # Auto-detect VIA_MAC from neighbor table
+    if [[ -z "$VIA_MAC" ]]; then
+        VIA_MAC=$(ip neighbor show | grep "^$VIA_IP " | awk '{print $5}' 2>/dev/null || echo "")
+        if [[ -z "$VIA_MAC" ]]; then
+            echo "[INFO] via-mac not found in neighbor table, will be detected during configuration" >&2
+        else
+            echo "[INFO] Auto-detected via-mac: $VIA_MAC" >&2
+        fi
+    fi
+
+    if [[ -z "$TOTAL_BANDWIDTH" ]]; then
+        echo "[ERROR] Missing required parameter: --total-bandwidth" >&2
+        errors=1
+    fi
+
+    if [[ -z "$TC_DEFAULT" ]]; then
+        echo "[ERROR] Missing required parameter: --tc-default" >&2
+        echo "请提供未声明端口的默认处理方式，例如:" >&2
+        echo "  --tc-default 'drop' (丢弃未配置的流量)" >&2
+        echo "  --tc-default 'shared' (共享总带宽给未配置的流量)" >&2
+        echo "  --tc-default '10Mbit' (为未配置的流量共享10Mbit带宽)" >&2
+        errors=1
+    else
+        # 解析 tc-default 参数
+        if [[ "$TC_DEFAULT" == "drop" ]]; then
+            TC_DEFAULT_MODE="drop"
+            TC_DEFAULT_BANDWIDTH=""
+            echo "[DEBUG] tc-default mode set to: drop" >&2
+        elif [[ "$TC_DEFAULT" == "shared" ]]; then
+            TC_DEFAULT_MODE="shared"
+            TC_DEFAULT_BANDWIDTH="$TOTAL_BANDWIDTH"
+            echo "[DEBUG] tc-default mode set to: shared, bandwidth: $TC_DEFAULT_BANDWIDTH" >&2
+        elif [[ "$TC_DEFAULT" =~ ^[0-9]+[kKmMgG]?bit$ ]]; then
+            TC_DEFAULT_MODE="custom"
+            TC_DEFAULT_BANDWIDTH="$TC_DEFAULT"
+            echo "[DEBUG] tc-default mode set to: custom, bandwidth: $TC_DEFAULT_BANDWIDTH" >&2
+        else
+            echo "[ERROR] Invalid --tc-default format: $TC_DEFAULT" >&2
+            echo "支持的格式:" >&2
+            echo "  'drop' - 丢弃未配置的流量" >&2
+            echo "  'shared' - 共享总带宽给未配置的流量" >&2
+            echo "  'bandwidth' - 为未配置的流量共享指定带宽 (例如: '10Mbit', '100kbit')" >&2
+            errors=1
+        fi
+    fi
+
+    if [[ $errors -eq 1 ]]; then
+        echo "[ERROR] Parameter validation failed" >&2
+        show_help
+        exit 1
+    fi
 }
 
 # --- 自动检测HTB接口函数 ---
@@ -182,48 +277,6 @@ validate_parameters() {
         return 0
     fi
     
-    local errors=0
-
-    # Validate required parameters for configuration mode
-    if [[ -z "$INGRESS_IP" ]]; then
-        echo "[ERROR] Missing required parameter: --ingress-ip" >&2
-        errors=1
-    fi
-
-    if [[ -z "$INGRESS_INTERFACE" ]]; then
-        echo "[ERROR] Missing required parameter: --ingress-interface" >&2
-        errors=1
-    fi
-
-    if [[ -z "$EGRESS_INTERFACE" ]]; then
-        echo "[ERROR] Missing required parameter: --egress-interface" >&2
-        errors=1
-    fi
-
-    if [[ -z "$VIA_IP" ]]; then
-        echo "[ERROR] Missing required parameter: --via-ip" >&2
-        errors=1
-    fi
-
-    if [[ -z "$VIA_MAC" ]]; then
-        VIA_MAC=$(ip n | grep "$VIA_IP " | awk '{print $5}')
-        if [[ -z "$VIA_MAC" ]]; then
-            echo "[ERROR] Missing required parameter: --via-mac" >&2
-            errors=1
-        fi
-    fi
-
-    if [[ -z "$TOTAL_BANDWIDTH" ]]; then
-        echo "[ERROR] Missing required parameter: --total-bandwidth" >&2
-        errors=1
-    fi
-
-    if [[ $errors -eq 1 ]]; then
-        echo "[ERROR] Parameter validation failed" >&2
-        show_help
-        exit 1
-    fi
-
     # Extract target IP (remove CIDR mask)
     TARGET_IP=$(echo "$INGRESS_IP" | cut -d'/' -f1)
     echo "[DEBUG] Extracted target IP: $TARGET_IP from $INGRESS_IP" >&2
@@ -237,7 +290,18 @@ show_configuration() {
     echo "目标IP: $TARGET_IP"
     echo "出口接口: $EGRESS_INTERFACE"
     echo "下一跳IP: $VIA_IP"
+    echo "下一跳MAC: $VIA_MAC"
     echo "总带宽: $TOTAL_BANDWIDTH"
+    echo "默认处理方式: $TC_DEFAULT"
+    if [[ "$TC_DEFAULT_MODE" == "drop" ]]; then
+        echo "  模式: 丢弃流量"
+    elif [[ "$TC_DEFAULT_MODE" == "shared" ]]; then
+        echo "  模式: 共享总带宽"
+        echo "  带宽: $TC_DEFAULT_BANDWIDTH"
+    else
+        echo "  模式: 共享自定义带宽"
+        echo "  带宽: $TC_DEFAULT_BANDWIDTH"
+    fi
     echo "TC规则数量: ${#TC_RULES[@]}"
     for rule in "${TC_RULES[@]}"; do
         echo "  TC规则: $rule"
@@ -409,6 +473,17 @@ configure_system_settings() {
     echo "[DEBUG] Configuring route for $TARGET_IP via $VIA_IP on $EGRESS_INTERFACE" >&2
     echo "[DEBUG] Setting neighbor entry for $VIA_IP with MAC $VIA_MAC" >&2
 
+    # Auto-detect VIA_MAC if not already detected
+    if [[ -z "$VIA_MAC" ]]; then
+        echo "Auto-detecting via-mac from neighbor table..."
+        VIA_MAC=$(ip neighbor show | grep "^$VIA_IP " | awk '{print $5}' 2>/dev/null || echo "")
+        if [[ -z "$VIA_MAC" ]]; then
+            echo "[WARNING] via-mac not found in neighbor table, you may need to ping the via-ip first" >&2
+        else
+            echo "[INFO] Auto-detected via-mac: $VIA_MAC" >&2
+        fi
+    fi
+
     # Configure forwarding route
     echo "Adding forwarding route: $TARGET_IP via $VIA_IP dev $EGRESS_INTERFACE onlink"
     if  ip route add "$TARGET_IP" via "$VIA_IP" dev "$EGRESS_INTERFACE" onlink; then
@@ -418,13 +493,18 @@ configure_system_settings() {
         echo "[WARNING] Route may already exist or failed to add" >&2
     fi
 
-    # Configure neighbor table entry
-    echo "Adding neighbor table entry: $VIA_IP lladdr $VIA_MAC dev $EGRESS_INTERFACE"
-    if  ip neighbor add "$VIA_IP" lladdr "$VIA_MAC" dev "$EGRESS_INTERFACE" nud permanent; then
-        echo "[INFO] Neighbor table entry added successfully" >&2
-        echo "✓ Neighbor: $VIA_IP -> $VIA_MAC on $EGRESS_INTERFACE"
+    # Configure neighbor table entry (only if VIA_MAC is available)
+    if [[ -n "$VIA_MAC" ]]; then
+        echo "Adding neighbor table entry: $VIA_IP lladdr $VIA_MAC dev $EGRESS_INTERFACE"
+        if  ip neighbor add "$VIA_IP" lladdr "$VIA_MAC" dev "$EGRESS_INTERFACE" nud permanent; then
+            echo "[INFO] Neighbor table entry added successfully" >&2
+            echo "✓ Neighbor: $VIA_IP -> $VIA_MAC on $EGRESS_INTERFACE"
+        else
+            echo "[WARNING] Neighbor entry may already exist or failed to add" >&2
+        fi
     else
-        echo "[WARNING] Neighbor entry may already exist or failed to add" >&2
+        echo "[WARNING] via-mac not available, skipping neighbor table entry" >&2
+        echo "[INFO] You may need to manually add the neighbor entry or ensure the via-ip is reachable" >&2
     fi
     
     echo "[INFO] System configuration completed for all requirements" >&2
@@ -440,8 +520,15 @@ create_basic_tc_structure() {
      tc class add dev "$EGRESS_INTERFACE" parent 1: classid 1:1 htb rate "$TOTAL_BANDWIDTH" ceil "$TOTAL_BANDWIDTH"
 
     echo "2. 创建缺省二级子类..."
-    # 缺省类：其他端口共享父类总带宽
-     tc class add dev "$EGRESS_INTERFACE" parent 1:1 classid 1:10 htb rate 1mbit ceil "$TOTAL_BANDWIDTH"
+    if [[ "$TC_DEFAULT_MODE" == "drop" ]]; then
+        # 对于drop模式，创建一个极小带宽的class来实现丢包效果
+        echo "  配置为丢弃未声明端口的流量"
+         tc class add dev "$EGRESS_INTERFACE" parent 1:1 classid 1:10 htb rate 1kbit ceil 1kbit
+    else
+        # 对于shared/custom模式，使用指定的带宽
+        echo "  配置为共享带宽: $TC_DEFAULT_BANDWIDTH"
+         tc class add dev "$EGRESS_INTERFACE" parent 1:1 classid 1:10 htb rate "$TC_DEFAULT_BANDWIDTH" ceil "$TC_DEFAULT_BANDWIDTH"
+    fi
 }
 
 # --- 解析并创建TC规则函数 ---
@@ -449,11 +536,44 @@ create_tc_rules_from_config() {
     echo "3. 根据TC规则创建端口限流二级子类..."
     local classid_counter=11
     
+    # 创建一个关联数组来存储端口到规则的映射，用于处理重复端口
+    declare -A port_rules_map
+    
+    # 首先解析所有规则，处理重复端口（保留最新的）
     for rule in "${TC_RULES[@]}"; do
-        # 解析规则格式: "port[,port]...:bandwidth"
-        if [[ "$rule" =~ ^([0-9,]+):(.+)$ ]]; then
-            local ports="${BASH_REMATCH[1]}"
+        # 解析规则格式: "name:port[,port]...:bandwidth"
+        if [[ "$rule" =~ ^([^:]+):([0-9,]+):(.+)$ ]]; then
+            local name="${BASH_REMATCH[1]}"
+            local ports="${BASH_REMATCH[2]}"
+            local bandwidth="${BASH_REMATCH[3]}"
+            
+            # 分割端口并存储规则
+            IFS=',' read -ra PORT_ARRAY <<< "$ports"
+            for port in "${PORT_ARRAY[@]}"; do
+                # 存储最新的规则（后面的覆盖前面的）
+                port_rules_map["$port"]="$name:$bandwidth"
+                echo "[DEBUG] Port $port mapped to rule: $name:$bandwidth" >&2
+            done
+        else
+            echo "  警告: TC规则格式错误: $rule (应为 'name:port[,port]...:bandwidth')"
+        fi
+    done
+    
+    # 按规则名称分组端口
+    declare -A rule_groups
+    for port in "${!port_rules_map[@]}"; do
+        local rule_info="${port_rules_map[$port]}"
+        rule_groups["$rule_info"]+="$port,"
+    done
+    
+    # 为每个规则组创建TC类和过滤器
+    for rule_info in "${!rule_groups[@]}"; do
+        if [[ "$rule_info" =~ ^([^:]+):(.+)$ ]]; then
+            local name="${BASH_REMATCH[1]}"
             local bandwidth="${BASH_REMATCH[2]}"
+            local ports="${rule_groups[$rule_info]}"
+            # 移除末尾的逗号
+            ports="${ports%,}"
             
             # Calculate appropriate burst size (at least 10KB or 1/10 of rate)
             local burst_size
@@ -475,8 +595,8 @@ create_tc_rules_from_config() {
                     ;;
             esac
             
-            echo "  创建二级子类 1:$classid_counter，端口: $ports，带宽: $bandwidth，突发: $burst_size"
-            echo "[DEBUG] Creating class 1:$classid_counter with rate=$bandwidth, burst=$burst_size" >&2
+            echo "  创建二级子类 1:$classid_counter，名称: $name，端口: $ports，带宽: $bandwidth，突发: $burst_size"
+            echo "[DEBUG] Creating class 1:$classid_counter with name=$name, rate=$bandwidth, burst=$burst_size" >&2
             
             # Create class with calculated burst size
              tc class add dev "$EGRESS_INTERFACE" parent 1:1 classid 1:$classid_counter htb \
@@ -486,8 +606,6 @@ create_tc_rules_from_config() {
             create_port_filters "$ports" "$classid_counter"
             
             ((classid_counter++))
-        else
-            echo "  警告: TC规则格式错误: $rule (应为 'port[,port]...:bandwidth')"
         fi
     done
 }
@@ -696,11 +814,36 @@ generate_equivalent_command() {
     
     # 获取总带宽
     local total_bandwidth
-            total_bandwidth=$(tc class show dev "$EGRESS_INTERFACE" | grep "^class htb 1:1 root" | head -1 | grep -o "rate [^ ]*" | cut -d' ' -f2)
+    total_bandwidth=$(tc class show dev "$EGRESS_INTERFACE" | grep "^class htb 1:1 root" | head -1 | grep -o "rate [^ ]*" | cut -d' ' -f2)
     
     if [[ -z "$total_bandwidth" ]]; then
         echo "无法解析总带宽配置"
         return 1
+    fi
+    
+    # 获取默认class配置
+    local default_class_info
+    default_class_info=$(tc class show dev "$EGRESS_INTERFACE" | grep "^class htb 1:10 parent")
+    
+    if [[ -z "$default_class_info" ]]; then
+        echo "无法解析默认class配置"
+        return 1
+    fi
+    
+    # 判断默认模式
+    local tc_default_config
+    local default_rate
+    default_rate=$(echo "$default_class_info" | grep -o "rate [^ ]*" | cut -d' ' -f2)
+    
+    if [[ "$default_rate" == "1kbit" ]]; then
+        tc_default_config="drop"
+        echo "检测到默认处理方式: drop (丢弃未配置的流量)"
+    elif [[ "$default_rate" == "$total_bandwidth" ]]; then
+        tc_default_config="shared"
+        echo "检测到默认处理方式: shared (共享总带宽)"
+    else
+        tc_default_config="$default_rate"
+        echo "检测到默认处理方式: $default_rate (共享自定义带宽)"
     fi
     
     echo "检测到总带宽: $total_bandwidth"
@@ -714,16 +857,16 @@ generate_equivalent_command() {
     base_cmd+=" --ingress-ip $DETECTED_INGRESS_IP"
     base_cmd+=" --ingress-interface $DETECTED_INGRESS_INTERFACE"
     base_cmd+=" --via-ip $DETECTED_VIA_IP"
-    base_cmd+=" --via-mac $DETECTED_VIA_MAC"
     base_cmd+=" --total-bandwidth $total_bandwidth"
+    base_cmd+=" --tc-default \"$tc_default_config\""
     
     # 解析端口限流规则
     echo ""
     echo "解析端口限流规则..."
     
-            # 获取所有非缺省的class (排除根类1:1和默认类1:10)
-        local classes
-        classes=$(tc class show dev "$EGRESS_INTERFACE" | grep "^class htb 1:" | grep -v "1:1 root" | grep -v "1:10 parent")
+    # 获取所有非缺省的class (排除根类1:1和默认类1:10)
+    local classes
+    classes=$(tc class show dev "$EGRESS_INTERFACE" | grep "^class htb 1:" | grep -v "1:1 root" | grep -v "1:10 parent")
     
     if [[ -z "$classes" ]]; then
         echo "未发现端口限流规则"
@@ -736,14 +879,17 @@ generate_equivalent_command() {
     # 按class ID分组处理端口规则
     declare -A class_bandwidth_map
     declare -A class_ports_map
+    declare -A class_names_map
     
-    # 解析每个class的带宽
+    # 解析每个class的带宽和class ID
     while IFS= read -r class_line; do
         if [[ "$class_line" =~ class\ htb\ 1:([0-9]+).*rate\ ([^ ]*) ]]; then
             local class_id="${BASH_REMATCH[1]}"
             local bandwidth="${BASH_REMATCH[2]}"
             class_bandwidth_map["$class_id"]="$bandwidth"
             class_ports_map["$class_id"]=""
+            # 使用通用名称，因为show模式无法获取原始名称
+            class_names_map["$class_id"]="class-$class_id"
         fi
     done <<< "$classes"
     
@@ -805,15 +951,20 @@ generate_equivalent_command() {
         fi
     done <<< "$filters"
     
-    # 生成tc-rule参数
+    # 生成tc-rule参数 - 使用实际的端口和带宽信息
     local tc_rules=()
-    for class_id in "${!class_bandwidth_map[@]}"; do
+    # 按class ID顺序处理
+    local sorted_class_ids=($(printf '%s\n' "${!class_bandwidth_map[@]}" | sort -n))
+    
+    for class_id in "${sorted_class_ids[@]}"; do
         local bandwidth="${class_bandwidth_map[$class_id]}"
         local ports="${class_ports_map[$class_id]}"
+        local name="${class_names_map[$class_id]}"
         
         if [[ -n "$ports" ]]; then
-            tc_rules+=("--tc-rule \"$ports:$bandwidth\"")
-            echo "  Class 1:$class_id: 端口 $ports -> 带宽 $bandwidth"
+            # 由于show模式无法获取原始名称，使用通用格式
+            tc_rules+=("--tc-rule \"$name:$ports:$bandwidth\"")
+            echo "  Class 1:$class_id: 名称 $name, 端口 $ports -> 带宽 $bandwidth"
         fi
     done
 
@@ -839,6 +990,7 @@ generate_equivalent_command() {
     echo "  出口接口: $EGRESS_INTERFACE"
     echo "  入口接口: $DETECTED_INGRESS_INTERFACE"
     echo "  总带宽: $total_bandwidth"
+    echo "  默认处理方式: $tc_default_config"
     echo "  入口IP: $DETECTED_INGRESS_IP"
     echo "  下一跳IP: $DETECTED_VIA_IP"
     echo "  下一跳MAC: $DETECTED_VIA_MAC"
@@ -846,22 +998,25 @@ generate_equivalent_command() {
     
     if [[ ${#tc_rules[@]} -gt 0 ]]; then
         echo "  端口限流详情:"
-        for class_id in "${!class_bandwidth_map[@]}"; do
+        # 按class ID顺序显示
+        for class_id in "${sorted_class_ids[@]}"; do
             local bandwidth="${class_bandwidth_map[$class_id]}"
             local ports="${class_ports_map[$class_id]}"
+            local name="${class_names_map[$class_id]}"
             if [[ -n "$ports" && -n "$bandwidth" ]]; then
                 local port_count=$(echo "$ports" | tr ',' '\n' | wc -l)
-                echo "    Class 1:$class_id: $port_count 个端口($ports) 限制 $bandwidth"
+                echo "    Class 1:$class_id: 名称 $name, $port_count 个端口($ports) 限制 $bandwidth"
             fi
         done
     fi
     
     echo ""
     echo "💡 提示:"
+    echo "  ⚠️  Show模式无法获取原始规则名称，显示为通用名称"
+    echo "  📋 可直接复制上述等效命令重新配置"
     if [[ "$DETECTED_INGRESS_IP" == "[无法自动检测]" || "$DETECTED_VIA_IP" == "[无法自动检测]" ]]; then
         echo "  ⚠️  部分IP参数无法自动检测，请手动补充"
     fi
-    echo "  📋 可直接复制上述等效命令重新配置"
 }
 
 # --- Show模式: 主函数 ---
