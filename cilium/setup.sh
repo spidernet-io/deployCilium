@@ -166,6 +166,7 @@ if [ "${HELM_DRY_RUN}" != "true" ] && [ "${PRINT_IMAGES}" != "true" ] && [ "${PR
     cp  ${CURRENT_DIR_PATH}/binary/hubble-cli-${HUBBLE_CLI_VERSION}-linux-amd64.tar.gz /tmp/hubble-cli-linux-amd64.tar.gz
     (
         cd /tmp
+        sudo rm -f hubble
         tar xzvf hubble-cli-linux-amd64.tar.gz
         chmod +x hubble
         sudo cp hubble /usr/sbin/
@@ -174,6 +175,7 @@ if [ "${HELM_DRY_RUN}" != "true" ] && [ "${PRINT_IMAGES}" != "true" ] && [ "${PR
     cp ${CURRENT_DIR_PATH}/binary/cilium-cli-${CILIUM_CLI_VERSION}-linux-amd64.tar.gz /tmp/cilium-cli-linux-amd64.tar.gz
     (
         cd /tmp
+        sudo rm -f cilium
         tar xzvf cilium-cli-linux-amd64.tar.gz
         chmod +x cilium
         sudo mv cilium /usr/sbin/
