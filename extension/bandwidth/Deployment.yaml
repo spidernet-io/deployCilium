@@ -1,0 +1,131 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bandwidth-ctl
+  namespace: bandwidth-ctl
+  labels:
+    app: bandwidth-ctl
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bandwidth-ctl
+  template:
+    metadata:
+      labels:
+        app: bandwidth-ctl
+      annotations:
+        ipam.spidernet.io/ippools: '[{"interface":"eth0","ipv4":["pool1"]}]'
+        v1.multus-cni.io/default-network: kube-system/vlan29
+    spec:
+      hostPID: true
+      dnsPolicy: ClusterFirst
+      initContainers:
+        - name: init-sysctl
+          image: docker.m.daocloud.io/library/alpine:latest
+          command: ['sh', '-c']
+          args:
+            - |
+              echo "🔧 执行网络参数初始化..."
+              
+              # === 你要求的 rp_filter 命令 ===
+              echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter
+              echo 0 > /proc/sys/net/ipv4/conf/default/rp_filter
+              for interface in /proc/sys/net/ipv4/conf/*/rp_filter; do
+                  echo 0 > "$interface"
+              done
+              # === 结束 ===
+              
+              echo "📂 拷贝 ingress.sh 和 egress.sh 到主机..."
+              # 创建目标目录
+              mkdir -p /host-opt/bandwidth-ctl
+              
+              # 拷贝文件
+              if [ -f "/ingress.sh" ]; then
+                  cp /ingress.sh /host-opt/bandwidth-ctl/
+                  chmod +x /host-opt/bandwidth-ctl/ingress.sh
+                  echo "✅ ingress.sh 已拷贝到 /opt/bandwidth-ctl/"
+              else
+                  echo "⚠️ ingress.sh 文件不存在"
+              fi
+              
+              if [ -f "/egress.sh" ]; then
+                  cp /egress.sh /host-opt/bandwidth-ctl/
+                  chmod +x /host-opt/bandwidth-ctl/egress.sh
+                  echo "✅ egress.sh 已拷贝到 /opt/bandwidth-ctl/"
+              else
+                  echo "⚠️ egress.sh 文件不存在"
+              fi
+              
+              echo "💾 更新持久化配置..."
+              CONF_FILE="/host-sysctl/50-default.conf"
+              if [ -f "$CONF_FILE" ]; then
+                  cp "$CONF_FILE" "$CONF_FILE.bak.$(date +%s)" 2>/dev/null || true
+                  sed -i 's/net.ipv4.conf.default.rp_filter = 2/net.ipv4.conf.default.rp_filter = 0/' "$CONF_FILE" 2>/dev/null || true
+                  sed -i 's/net.ipv4.conf.*.rp_filter = 2/net.ipv4.conf.*.rp_filter = 0/' "$CONF_FILE" 2>/dev/null || true
+                  sysctl -p "$CONF_FILE" 2>/dev/null || true
+              else
+                  echo "⚠️ 配置文件不存在: $CONF_FILE"
+              fi
+              
+              echo "✅ initContainer 执行完成"
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: sysctl-dir
+              mountPath: /host-sysctl
+            - name: opt-dir
+              mountPath: /host-opt
+
+      containers:
+        - name: bandwidth-ctl
+          image: release.daocloud.io/spidernet-io/bandwidth-ctl:v1
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "🚀 启动 bandwidth-ctl 服务..."
+              while true; do sleep 30; done
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: sysctl-dir
+              mountPath: /host-sysctl
+            - name: opt-dir
+              mountPath: /host-opt
+      volumes:
+        - name: sysctl-dir
+          hostPath:
+            path: /usr/lib/sysctl.d
+            type: DirectoryOrCreate
+        - name: opt-dir
+          hostPath:
+            path: /opt
+            type: Directory
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - g-master13
+      schedulerName: default-scheduler
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 300
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 300
+      dnsConfig: {}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600

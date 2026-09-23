@@ -5,6 +5,7 @@
  ./egress.sh \
      --egress-interface eth1 \
      --egress-total-bandwidth "1Gbit" \
+     --egress-default-bandwidth "50Mbit" \
      --egress-ip-bandwidth "172.16.1.49:200Mbit" \
      --egress-ip-bandwidth "172.16.1.50,172.16.1.51:300Mbit"
 
@@ -19,12 +20,15 @@
      egress-ip-bandwidth 格式是 "ip1[,ip2,...]:bandwidth"
      一级别 父类 class 下有 根据 egress-ip-bandwidth 不同的 二级别 子类 
      每个 二级子类 基于 egress-ip-bandwidth 中的 ip 进行 filter，并设置 带宽 来 设置 限流 
-      有一个 缺省的 二级子类，对没有 命中的 其它 ip 进行 共享  父类 class 的 带宽
+     
+     有一个 缺省的 二级子类 (由 --egress-default-bandwidth 指定)，对没有 命中的 其它 ip 进行 限流或共享 父类 class 的 剩余带宽
+     如果 --egress-default-bandwidth 未指定，则缺省类的 ceil 为总带宽。
 
  qdisc htb 1: root (总带宽)
  ├── class 1:1 (一级父类) 
-     ├── class 1:10 (缺省，其他IP共享)
-#     ├── class 1:11 (IP组1限流)
+     ├── class 1:10 (缺省，其他IP限流或共享)
+     ├── class 1:11 (IP组1限流)
+     └── class 1:12 (IP组2限流)
 EOF
 
 set -e
@@ -32,6 +36,7 @@ set -e
 # --- 全局变量 ---
 EGRESS_INTERFACE=""
 EGRESS_TOTAL_BANDWIDTH=""
+EGRESS_DEFAULT_BANDWIDTH="" # 新增：默认带宽
 EGRESS_IP_RULES=()
 SHOW_MODE=false
 AUTO_ASSIGN_IPS=false
@@ -46,16 +51,17 @@ show_help() {
     echo "选项:"
     echo "  --egress-interface IFACE       出口网络接口 (必需)"
     echo "  --egress-total-bandwidth BW    总出口带宽限制 (必需)"
+    echo "  --egress-default-bandwidth BW  未匹配IP的默认带宽限制 (可选，若不指定则默认类ceil为总带宽)"
     echo "  --egress-ip-bandwidth RULE     IP限流规则，格式: 'ip1[,ip2,...]：bandwidth' (可重复)"
     echo "  --auto-assign-ips              自动将限流IP地址配置到出口接口上 (可选)"
     echo "  --help                         显示此帮助信息"
     echo ""
     echo "示例:"
-    echo "  配置限流:"
-    echo "  $0 --egress-interface 'eth0' --egress-total-bandwidth '100Mbit' --egress-ip-bandwidth '192.168.1.10:10Mbit' --egress-ip-bandwidth '192.168.1.11,192.168.1.12:20Mbit'"
+    echo "  配置限流 (指定默认带宽):"
+    echo "  $0 --egress-interface 'eth0' --egress-total-bandwidth '100Mbit' --egress-default-bandwidth '10Mbit' --egress-ip-bandwidth '192.168.1.10:20Mbit'"
     echo ""
-    echo "  配置限流并自动分配IP地址:"
-    echo "  $0 --egress-interface 'eth0' --egress-total-bandwidth '100Mbit' --egress-ip-bandwidth '192.168.1.10:10Mbit' --auto-assign-ips"
+    echo "  配置限流 (不指定默认带宽，其他流量共享总带宽):"
+    echo "  $0 --egress-interface 'eth0' --egress-total-bandwidth '100Mbit' --egress-ip-bandwidth '192.168.1.10:20Mbit'"
     echo ""
     echo "  显示当前配置:"
     echo "  $0 show --egress-interface eth0           # 指定接口"
@@ -82,6 +88,10 @@ parse_arguments() {
                 ;;
             --egress-total-bandwidth)
                 EGRESS_TOTAL_BANDWIDTH="$2"
+                shift 2
+                ;;
+            --egress-default-bandwidth) # 新增参数解析
+                EGRESS_DEFAULT_BANDWIDTH="$2"
                 shift 2
                 ;;
             --egress-ip-bandwidth)
@@ -124,6 +134,23 @@ validate_parameters() {
         errors=1
     fi
 
+    # 验证带宽格式 (简单检查是否包含数字和单位)
+    if [[ -n "$EGRESS_TOTAL_BANDWIDTH" && ! "$EGRESS_TOTAL_BANDWIDTH" =~ ^[0-9]+[KMG]bit$ ]]; then
+         echo "错误: --egress-total-bandwidth 格式不正确 (示例: 100Mbit, 1Gbit)"
+         errors=1
+    fi
+    if [[ -n "$EGRESS_DEFAULT_BANDWIDTH" && ! "$EGRESS_DEFAULT_BANDWIDTH" =~ ^[0-9]+[KMG]bit$ ]]; then
+         echo "错误: --egress-default-bandwidth 格式不正确 (示例: 100Mbit, 1Gbit)"
+         errors=1
+    fi
+
+    for rule in "${EGRESS_IP_RULES[@]}"; do
+        if [[ ! "$rule" =~ ^[0-9.,]+:[0-9]+[KMG]bit$ ]]; then
+             echo "错误: --egress-ip-bandwidth 格式不正确 (示例: '192.168.1.10:10Mbit' 或 '192.168.1.10,192.168.1.11:20Mbit')"
+             errors=1
+        fi
+    done
+
     if [[ $errors -eq 1 ]]; then
         show_help
         exit 1
@@ -135,6 +162,7 @@ show_configuration() {
     echo "=== 配置参数 ==="
     echo "出口接口: $EGRESS_INTERFACE"
     echo "总出口带宽: $EGRESS_TOTAL_BANDWIDTH"
+    echo "默认带宽限制: ${EGRESS_DEFAULT_BANDWIDTH:-未设置 (默认类ceil为总带宽)}"
     echo "IP限流规则数量: ${#EGRESS_IP_RULES[@]}"
     for rule in "${EGRESS_IP_RULES[@]}"; do
         echo "  IP限流规则: $rule"
@@ -334,14 +362,27 @@ create_basic_tc_structure() {
     
     # Create HTB root qdisc - cleanup function has already handled any existing qdiscs
     # Use r2q=100 to avoid quantum warnings
-    sudo tc qdisc add dev "$EGRESS_INTERFACE" root handle 1: htb default 10 r2q 100
+    # Attempt to add HTB root qdisc, retrying once if it fails initially
+    # This handles cases where the interface might not be fully ready after cleanup or replace
+    if ! sudo tc qdisc add dev "$EGRESS_INTERFACE" root handle 1: htb default 10 r2q 100 2>/dev/null; then
+        echo "  警告: 首次添加HTB队列规程失败，等待后重试..."
+        sleep 1 # Wait a moment for the system to stabilize after replace/cleanup
+        sudo tc qdisc add dev "$EGRESS_INTERFACE" root handle 1: htb default 10 r2q 100
+    fi
     
     # Create parent class
     sudo tc class add dev "$EGRESS_INTERFACE" parent 1: classid 1:1 htb rate "$EGRESS_TOTAL_BANDWIDTH" ceil "$EGRESS_TOTAL_BANDWIDTH"
 
-    echo "2. 创建缺省二级子类（其他IP共享带宽）..."
-    # Default child class for other IP traffic (1:10) - default class
-    sudo tc class add dev "$EGRESS_INTERFACE" parent 1:1 classid 1:10 htb rate 1mbit ceil "$EGRESS_TOTAL_BANDWIDTH"
+    echo "2. 创建缺省二级子类（其他IP限流或共享带宽）..."
+    if [[ -n "$EGRESS_DEFAULT_BANDWIDTH" ]]; then
+        # 如果指定了默认带宽，则 rate 和 ceil 都设置为该值
+        sudo tc class add dev "$EGRESS_INTERFACE" parent 1:1 classid 1:10 htb rate "$EGRESS_DEFAULT_BANDWIDTH" ceil "$EGRESS_DEFAULT_BANDWIDTH"
+        echo "   默认类 1:10 设置为 rate/ceil: $EGRESS_DEFAULT_BANDWIDTH"
+    else
+        # 如果未指定默认带宽，则 rate 低，ceil 为总带宽 (保持原逻辑)
+        sudo tc class add dev "$EGRESS_INTERFACE" parent 1:1 classid 1:10 htb rate 1mbit ceil "$EGRESS_TOTAL_BANDWIDTH"
+        echo "   默认类 1:10 设置为 rate: 1mbit, ceil: $EGRESS_TOTAL_BANDWIDTH (共享剩余带宽)"
+    fi
 }
 
 # --- 解析并创建IP限流规则函数 ---
@@ -377,7 +418,9 @@ create_ip_filters() {
     # 分割IP字符串
     IFS=',' read -ra IP_ARRAY <<< "$ips"
     for ip in "${IP_ARRAY[@]}"; do
-        echo "    添加源IP $ip 的过滤器"
+        # 去掉可能的空格
+        ip=$(echo "$ip" | xargs)
+        echo "    添加源IP $ip 的过滤器，分类到 class 1:$classid"
         sudo tc filter add dev "$EGRESS_INTERFACE" protocol ip parent 1: prio $prio_counter u32 \
             match ip src "$ip"/32 \
             flowid 1:$classid
@@ -400,14 +443,12 @@ configure_tc_rules() {
         create_ip_rules_from_config
         create_main_filter
     else
-        echo "未配置IP限流规则，所有流量将使用默认类别"
+        echo "未配置IP限流规则，所有流量将使用默认类别 (class 1:10)"
     fi
     
     echo ""
     echo "=== TC配置完成 ==="
 }
-
-
 
 # --- 验证配置结果函数 ---
 verify_configuration() {
@@ -453,17 +494,35 @@ verify_configuration() {
         if [[ $class_output =~ rate[[:space:]]+([^[:space:]]+) ]]; then
             total_bandwidth="${BASH_REMATCH[1]}"
         fi
-        
+
+        # 解析默认类带宽
+        local default_bandwidth=""
+        local default_class_output=$(sudo tc class show dev "$EGRESS_INTERFACE" | grep "class htb 1:10.*parent 1:1")
+        if [[ $default_class_output =~ rate[[:space:]]+([^[:space:]]+) ]]; then
+            default_bandwidth="${BASH_REMATCH[1]}"
+        fi
+        # 检查 ceil
+        local default_ceil=""
+        if [[ $default_class_output =~ ceil[[:space:]]+([^[:space:]]+) ]]; then
+            default_ceil="${BASH_REMATCH[1]}"
+        fi
+        # 如果 rate 和 ceil 不同，或者 ceil 等于总带宽而 rate 不是 1mbit，则认为是明确设置的带宽
+        if [[ "$default_bandwidth" == "$default_ceil" && "$default_bandwidth" != "1mbit" ]] || [[ "$default_ceil" != "$total_bandwidth" ]]; then
+            echo "  默认类带宽: $default_bandwidth (ceil: $default_ceil)"
+        else
+            echo "  默认类带宽: 未明确设置 (ceil: $total_bandwidth, rate: 1mbit)"
+        fi
+
         # 创建临时关联数组来存储 classid -> bandwidth 映射
         declare -A class_bandwidth_map
         declare -A class_ip_map
         
-        # 解析二级子类的带宽配置
+        # 解析二级子类的带宽配置 (排除默认类 1:10 和根类 1:1)
         while IFS= read -r line; do
             if [[ $line =~ class[[:space:]]+htb[[:space:]]+1:([0-9]+)[[:space:]].*rate[[:space:]]+([^[:space:]]+) ]]; then
                 local classid="${BASH_REMATCH[1]}"
                 local bandwidth="${BASH_REMATCH[2]}"
-                if [[ $classid != "10" && $classid != "1" ]]; then  # 排除默认类别1:10和根类别1:1
+                if [[ $classid != "10" && $classid != "1" ]]; then
                     class_bandwidth_map["$classid"]="$bandwidth"
                 fi
             fi
@@ -510,6 +569,10 @@ verify_configuration() {
         if [[ -n "$total_bandwidth" ]]; then
             cmd_line="$cmd_line"$'\n'"    --egress-total-bandwidth $total_bandwidth \\"
         fi
+
+        if [[ -n "$default_bandwidth" && "$default_ceil" == "$default_bandwidth" && "$default_bandwidth" != "1mbit" ]]; then
+            cmd_line="$cmd_line"$'\n'"    --egress-default-bandwidth $default_bandwidth \\"
+        fi
         
         # 按类别输出IP限流规则（保持原有分组）
         for classid in "${!class_bandwidth_map[@]}"; do
@@ -534,6 +597,13 @@ verify_configuration() {
         echo "  📊 配置总结:"
         if [[ -n "$total_bandwidth" ]]; then
             echo "    总带宽: $total_bandwidth"
+        fi
+        if [[ -n "$default_bandwidth" ]]; then
+            if [[ "$default_ceil" == "$default_bandwidth" && "$default_bandwidth" != "1mbit" ]]; then
+                 echo "    默认带宽限制: $default_bandwidth"
+            else
+                 echo "    默认带宽限制: 未设置 (ceil: $total_bandwidth)"
+            fi
         fi
         echo "    限流规则数: ${#class_bandwidth_map[@]}"
         # 计算受限IP总数
@@ -565,10 +635,16 @@ verify_configuration() {
     echo "=== 配置验证完成 ==="
     echo ""
     echo "📝 使用说明:"
-    echo "  - 出口接口 $EGRESS_INTERFACE 总带宽限制: $EGRESS_TOTAL_BANDWIDTH"
+    if [[ -n "$EGRESS_DEFAULT_BANDWIDTH" ]]; then
+        echo "  - 出口接口 $EGRESS_INTERFACE 总带宽限制: $EGRESS_TOTAL_BANDWIDTH"
+        echo "  - 未匹配IP的默认带宽限制: $EGRESS_DEFAULT_BANDWIDTH"
+    else
+        echo "  - 出口接口 $EGRESS_INTERFACE 总带宽限制: $EGRESS_TOTAL_BANDWIDTH"
+        echo "  - 未匹配IP可共享总带宽上限: $EGRESS_TOTAL_BANDWIDTH (rate: 1mbit)"
+    fi
     echo "  - 配置了 ${#EGRESS_IP_RULES[@]} 条IP限流规则"
     echo "  - 指定IP的出口流量将根据配置进行限流"
-    echo "  - 其他IP的出口流量共享总带宽"
+    echo "  - 其他IP的出口流量将根据默认带宽设置进行处理"
     echo ""
     echo "=== 脚本执行成功 ==="
 }
@@ -584,9 +660,10 @@ main() {
         
         # 自动检测配置了HTB的接口
         if [[ -z "$EGRESS_INTERFACE" ]]; then
-            EGRESS_INTERFACE=$(detect_htb_interface)
-            echo "自动检测到HTB接口: $EGRESS_INTERFACE"
-            echo ""
+            # 如果在 show 模式下未指定接口，提示用户
+            echo "错误: 使用 'show' 命令时必须指定 '--egress-interface IFACE'"
+            show_help
+            exit 1
         fi
         
         verify_configuration
@@ -607,4 +684,3 @@ main() {
 
 # --- 脚本入口点 ---
 main "$@"
-

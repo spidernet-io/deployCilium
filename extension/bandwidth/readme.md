@@ -37,6 +37,9 @@ echo 0 > /proc/sys/net/ipv4/conf/default/rp_filter
 for interface in /proc/sys/net/ipv4/conf/*/rp_filter; do
     echo 0 > "$interface"
 done
+sudo sed -i 's/net.ipv4.conf.default.rp_filter = 2/net.ipv4.conf.default.rp_filter = 0/' /usr/lib/sysctl.d/50-default.conf
+sudo sed -i 's/net.ipv4.conf.*.rp_filter = 2/net.ipv4.conf.*.rp_filter = 0/' /usr/lib/sysctl.d/50-default.conf
+sysctl -p /usr/lib/sysctl.d/50-default.conf
 
 # 创建或更新 sysctl 配置
 SYSCTL_FILE="/etc/sysctl.d/99-rp-filter.conf"
@@ -64,7 +67,9 @@ EOF
 ```
 
 4. 在入口流量节点 ingressNode 上启动一个 spiderpool 的 macvlan pod （ 纯 macvlan 单网卡，不需要和 cilium 搭配 双 网卡；且 该 pod yaml 需要设置  privileged=true ），并且 该 pod ip 不能是 Loadbalancer ip 池中的 ip
-    在 macvlan pod 内部 运行如下脚本 ingress.sh 
+    在 macvlan pod 内部 运行如下脚本 ingress.sh
+
+如果使用helm安装，需要调度pod到指定的ingress节点（bandwidth-ctl.tar.gz）
 
 
 ```shell
@@ -73,16 +78,18 @@ EOF
 # via-ip 是 宿主机的 kubelet ip
 # via-mac 是本pod 在宿主机侧的 veth 网卡的 mac , 可选，在 spiderpool 场景下，会尝试自动检测
 # total-bandwidth 设置集群总的入口带宽 ， 单位是 Mbit 或者 Gbit
-# tc-rule 设置一个 istio gateway 的 Loadbalancer ip 入口 端口的限流规则，格式 "port[,port]...:bandwidth"
+# tc-default "10Mbit" 默认共享未声明端口策略 ，drop 丢弃，shared共享总带宽，不单独限制，10Mbit 限制在10M
+# tc-rule 设置一个 istio gateway 的 Loadbalancer ip 入口 端口的限流规则，格式 "secure-app:port1,port2,...:bandwidth"
 
  ./ingress.sh  \
- 	--ingress-ip "172.16.13.90"  \
- 	--ingress-interface "eth0" \
- 	--egress-interface "veth0" \
- 	--via-ip "172.16.13.11" \
- 	--total-bandwidth "300Mbit" \
- 	--tc-rule "80:10Mbit"  \
- 	--tc-rule "443,900:20Mbit"
+         --ingress-ip "172.16.13.90"  \
+         --ingress-interface "macvlan0" \
+         --egress-interface "veth-ns" \
+         --via-ip "172.16.13.11" \
+         --total-bandwidth "300Mbit"  \
+         --tc-default "10Mbit" \
+         --tc-rule "web-server:80:10Mbit"  \
+         --tc-rule "secure-app:443,900:20Mbit"
 
 # 查看生效规则
  ./ingress.sh show
@@ -156,20 +163,51 @@ EOF
 kubectl -n kube-system exec ds/cilium -- cilium-dbg bpf egress list
 
 ```
+3.为未指定egress vip的其他ns pod 创建 出口网关策略
+apiVersion: cilium.io/v2
+kind: CiliumEgressGatewayPolicy
+metadata:
+  name: default-egress-policy
+spec:
+  # 选择器匹配所有没有 "custom-egress-policy: 'true'" 标签的 Pod
+  selectors:
+  - podSelector:
+      matchExpressions:
+      - key: custom-egress-policy
+        operator: NotIn
+        values:
+        - "true"
+      # 注意：matchExpressions 不能与 matchLabels 同时为空。
+      # 如果需要匹配所有命名空间，可以添加一个总是为真的表达式，或者确保所有 NS 都有基础标签。
+      # 例如，如果所有 NS 都有 'kubernetes.io/metadata.name' 标签：
+      # - key: kubernetes.io/metadata.name
+      #   operator: Exists
+      # 或者，为所有 NS 添加一个通用标签，如 'tenant-type: standard'
+      # matchLabels:
+      #   tenant-type: standard # 假设这是所有 NS 的通用标签
+  destinationCIDRs:
+    - "0.0.0.0/0"
+  egressGateway:
+    nodeSelector:
+      matchLabels:
+        # 设置默认出口网关节点的 label
+        kubernetes.io/hostname: g-master12 # <-- 替换为您的默认节点名
+    # 默认出口 IP
+    egressIP: 10.29.124.210 # <-- 替换为您的默认出口 IP
 
-
-
-3. 在出口网关节点上，运行如下脚本 egress.sh ，实现配置 网卡上的 带宽限制 
+4. 在出口网关节点上，运行如下脚本 egress.sh ，实现配置 网卡上的 带宽限制 
 
 
 ```shell
 # egress-interface 是出口网卡，它应该是默认路由的网卡
 # egress-total-bandwidth 控制的是总的出口带宽
+# egress-default-bandwidth 未声明的ns 公共带宽
 # egress-ip-bandwidth 设置了 每个租户的 出口 ip 的出口带宽 。 每个ip可以对应到一个或者多个租户来使用，每个ip后边带着针对该 ip 的出口带宽限制
  ./egress.sh \
-     --egress-interface eth1 \
+     --egress-interface ens192  \
      --egress-total-bandwidth "1Gbit" \
-     --egress-ip-bandwidth "172.16.1.49:200Mbit" \
+     --egress-default-bandwidth "50Mbit" \
+     --egress-ip-bandwidth "10.29.124.203:100Mbit" 
      --egress-ip-bandwidth "172.16.1.50,172.16.1.51:300Mbit"
 ```
 
