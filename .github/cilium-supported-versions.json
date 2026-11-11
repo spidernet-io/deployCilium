@@ -3,8 +3,8 @@
     {
       "minor": "1.18",
       "branch": "cilium/release-v1.18",
-      "latest_version": "1.18.3",
-      "updated_at": "2026-06-29T00:00:00Z",
+      "latest_version": "1.18.11",
+      "updated_at": "2026-11-11T00:00:00Z",
       "enabled": true
     },
     {
