@@ -52,7 +52,7 @@ sysctl -p "$SYSCTL_FILE"
 ```bash
 # ip 地址池 应该是 入口流量网卡的 子网，其中的ip 没人使用 
 cat <<EOF | kubectl apply -f -
-apiVersion: "cilium.io/v2alpha1"
+apiVersion: "cilium.io/v2"
 kind: CiliumLoadBalancerIPPool
 metadata:
   name: 13-ipv4
