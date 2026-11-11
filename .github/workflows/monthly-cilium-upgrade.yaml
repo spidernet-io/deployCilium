@@ -252,6 +252,14 @@ jobs:
         run: |
           updater/cilium/tools/run-cilium-upgrade.sh
 
+      # Single and multi-cluster e2e share one runner; the default inotify
+      # limits are too low and cilium-operator fails with "too many open files".
+      - name: Raise inotify limits for kind
+        if: steps.upgrade.outputs.changed == 'true'
+        run: |
+          sudo sysctl -w fs.inotify.max_user_instances=8192
+          sudo sysctl -w fs.inotify.max_user_watches=524288
+
       - name: Run pre-PR e2e validation
         if: steps.upgrade.outputs.changed == 'true'
         id: initial-e2e
