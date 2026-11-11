@@ -28,6 +28,18 @@ if [ -n "${K8S_VERSION}" ]; then
     flags="${flags} --image=kindest/node:${K8S_VERSION}"
 fi
 
+# Multiple kind clusters on one host exhaust the default inotify limits, and
+# cilium-operator then fails with "too many open files". Raise them if lower.
+for kv in fs.inotify.max_user_instances=8192 fs.inotify.max_user_watches=524288; do
+    key=${kv%=*}
+    want=${kv#*=}
+    cur=$(sysctl -n "${key}" 2>/dev/null || echo 0)
+    if [ "${cur}" -lt "${want}" ]; then
+        echo "Raising ${key} from ${cur} to ${want}"
+        sudo sysctl -w "${kv}" >/dev/null || echo "WARN: failed to raise ${key}" >&2
+    fi
+done
+
 # Create cluster
 kind create cluster --name=${CLUSTER_NAME} ${flags}
 
